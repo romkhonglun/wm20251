@@ -1,7 +1,0 @@
-2025-11-18 02:16:51,383 - INFO - logger class name: <class 'logging.Logger'> or Logger
-2025-11-18 02:16:51,384 - INFO - Bạn đã chọn size: small
-2025-11-18 02:22:04,765 - INFO - End Epoch [1/1], Avg Loss: 1.7920
-2025-11-18 02:30:08,699 - INFO - --- Validation Report ---
-2025-11-18 02:30:08,700 - INFO - Loss:   1.7918   | AUC: 0.5011
-2025-11-18 02:30:08,700 - INFO - NDCG@5: 0.5513 | MRR: 0.4090|
-2025-11-18 02:30:09,080 - INFO - Found new best model! Saved.

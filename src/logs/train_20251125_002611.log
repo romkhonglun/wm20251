@@ -1,0 +1,22 @@
+2025-11-25 00:26:11,996 - INFO - Training on 1 GPUs using DDP.
+2025-11-25 00:26:11,998 - INFO - Loading Embeddings...
+2025-11-25 00:26:12,517 - INFO - Loading DataFrames...
+2025-11-25 00:26:12,995 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-25 00:26:12,995 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-25 00:26:15,363 - INFO - Hoàn thành! Đã tạo map cho 15143 người dùng.
+2025-11-25 00:26:15,988 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-25 00:26:15,989 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-25 00:26:18,555 - INFO - Hoàn thành! Đã tạo map cho 15342 người dùng.
+2025-11-25 00:27:04,347 - INFO - End Epoch [1/2], Rank 0 Avg Loss: 1.6097
+2025-11-25 00:27:04,349 - INFO - ______Validating______
+2025-11-25 00:30:45,028 - INFO - --- Validation Report ---
+2025-11-25 00:30:45,028 - INFO - Metric Calculation Time: 186.2374s
+2025-11-25 00:30:45,028 - INFO - Loss:    1.6095 | Acc: 20.06% | AUC: 0.5001
+2025-11-25 00:30:45,028 - INFO - NDCG@5: 0.5900 | MRR: 0.4570
+2025-11-25 00:30:45,102 - INFO - Found new best model! Saved to checkpoints/best_model_auc_0.5001.pth
+2025-11-25 00:31:27,924 - INFO - End Epoch [2/2], Rank 0 Avg Loss: 1.6097
+2025-11-25 00:31:27,925 - INFO - ______Validating______
+2025-11-25 00:35:02,555 - INFO - --- Validation Report ---
+2025-11-25 00:35:02,555 - INFO - Metric Calculation Time: 180.8193s
+2025-11-25 00:35:02,555 - INFO - Loss:    1.6095 | Acc: 20.01% | AUC: 0.4999
+2025-11-25 00:35:02,555 - INFO - NDCG@5: 0.5897 | MRR: 0.4567

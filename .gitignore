@@ -1,0 +1,7 @@
+/input/
+/src/checkpoints/
+/src/logs
+/.idea
+
+.env
+*.zip

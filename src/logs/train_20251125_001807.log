@@ -1,0 +1,24 @@
+2025-11-25 00:18:07,538 - INFO - Embedding Dimension from config: 1024
+2025-11-25 00:18:07,538 - INFO - Loading Embeddings from: /home2/congnh/wm/input/EB_NeRD_small_embedded_text.pkl
+2025-11-25 00:18:07,993 - INFO - Embedding dimension check passed!
+2025-11-25 00:18:07,993 - INFO - Loading DataFrames...
+2025-11-25 00:18:08,923 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-25 00:18:08,924 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-25 00:18:11,354 - INFO - Hoàn thành! Đã tạo map cho 15143 người dùng.
+2025-11-25 00:18:11,355 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-25 00:18:11,355 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-25 00:18:13,824 - INFO - Hoàn thành! Đã tạo map cho 15342 người dùng.
+2025-11-25 00:18:48,436 - INFO - End Epoch [1/2], Avg Loss: 1.6096
+2025-11-25 00:18:48,437 - INFO - ______Validating______
+2025-11-25 00:21:47,387 - INFO - --- Validation Report ---
+2025-11-25 00:21:47,388 - INFO - Metric Calculation Time: 145.6348s
+2025-11-25 00:21:47,388 - INFO - Loss:   1.6095 | Acc: 20.02% | AUC: 0.5001
+2025-11-25 00:21:47,388 - INFO - NDCG@5: 0.5899 | MRR: 0.4569
+2025-11-25 00:21:47,463 - INFO - Found new best model! Saved to checkpoints/best_model_auc_0.5001.pth
+2025-11-25 00:22:19,632 - INFO - End Epoch [2/2], Avg Loss: 1.6096
+2025-11-25 00:22:19,632 - INFO - ______Validating______
+2025-11-25 00:25:17,182 - INFO - --- Validation Report ---
+2025-11-25 00:25:17,182 - INFO - Metric Calculation Time: 144.5989s
+2025-11-25 00:25:17,182 - INFO - Loss:   1.6095 | Acc: 20.11% | AUC: 0.5010
+2025-11-25 00:25:17,182 - INFO - NDCG@5: 0.5903 | MRR: 0.4575
+2025-11-25 00:25:17,255 - INFO - Found new best model! Saved to checkpoints/best_model_auc_0.5010.pth

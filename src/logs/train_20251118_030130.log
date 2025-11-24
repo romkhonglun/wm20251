@@ -1,0 +1,58 @@
+2025-11-18 03:01:30,789 - INFO - Bạn đã chọn size: small
+2025-11-18 03:01:32,992 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-18 03:01:32,993 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-18 03:01:36,487 - INFO - Hoàn thành! Đã tạo map cho 15143 người dùng.
+2025-11-18 03:01:36,488 - INFO - Bắt đầu tạo user_history_map (xử lý mảng bên trong)...
+2025-11-18 03:01:36,488 - INFO - Đang lặp qua các user và sắp xếp lịch sử nội tại...
+2025-11-18 03:01:39,850 - INFO - Hoàn thành! Đã tạo map cho 15342 người dùng.
+2025-11-18 03:03:30,965 - INFO - End Epoch [1/10], Avg Loss: 1.7920
+2025-11-18 03:03:30,965 - INFO - ______Validating______
+2025-11-18 03:09:06,784 - INFO - --- Validation Report ---
+2025-11-18 03:09:06,785 - INFO - Loss:   1.7918 | Acc: 16.73% | AUC: 0.5011
+2025-11-18 03:09:06,785 - INFO - NDCG@6: 0.5513 | MRR: 0.4090
+2025-11-18 03:09:06,864 - INFO - Found new best model! Saved.
+2025-11-18 03:10:52,399 - INFO - End Epoch [2/10], Avg Loss: 1.7919
+2025-11-18 03:10:52,399 - INFO - ______Validating______
+2025-11-18 03:17:19,084 - INFO - --- Validation Report ---
+2025-11-18 03:17:19,085 - INFO - Loss:   1.7918 | Acc: 16.76% | AUC: 0.5010
+2025-11-18 03:17:19,085 - INFO - NDCG@6: 0.5514 | MRR: 0.4092
+2025-11-18 03:18:52,157 - INFO - End Epoch [3/10], Avg Loss: 1.7919
+2025-11-18 03:18:52,158 - INFO - ______Validating______
+2025-11-18 03:24:49,845 - INFO - --- Validation Report ---
+2025-11-18 03:24:49,847 - INFO - Loss:   1.7918 | Acc: 16.66% | AUC: 0.5005
+2025-11-18 03:24:49,847 - INFO - NDCG@6: 0.5510 | MRR: 0.4086
+2025-11-18 03:26:29,726 - INFO - End Epoch [4/10], Avg Loss: 1.7919
+2025-11-18 03:26:29,727 - INFO - ______Validating______
+2025-11-18 03:32:13,001 - INFO - --- Validation Report ---
+2025-11-18 03:32:13,003 - INFO - Loss:   1.7918 | Acc: 16.64% | AUC: 0.5003
+2025-11-18 03:32:13,003 - INFO - NDCG@6: 0.5508 | MRR: 0.4084
+2025-11-18 03:33:45,277 - INFO - End Epoch [5/10], Avg Loss: 1.7919
+2025-11-18 03:33:45,278 - INFO - ______Validating______
+2025-11-18 03:39:36,833 - INFO - --- Validation Report ---
+2025-11-18 03:39:36,834 - INFO - Loss:   1.7920 | Acc: 16.63% | AUC: 0.4999
+2025-11-18 03:39:36,834 - INFO - NDCG@6: 0.5506 | MRR: 0.4082
+2025-11-18 03:41:14,360 - INFO - End Epoch [6/10], Avg Loss: 1.7919
+2025-11-18 03:41:14,362 - INFO - ______Validating______
+2025-11-18 03:47:27,283 - INFO - --- Validation Report ---
+2025-11-18 03:47:27,283 - INFO - Loss:   1.7918 | Acc: 16.64% | AUC: 0.5000
+2025-11-18 03:47:27,283 - INFO - NDCG@6: 0.5507 | MRR: 0.4082
+2025-11-18 03:49:07,609 - INFO - End Epoch [7/10], Avg Loss: 1.7919
+2025-11-18 03:49:07,610 - INFO - ______Validating______
+2025-11-18 03:55:04,765 - INFO - --- Validation Report ---
+2025-11-18 03:55:04,766 - INFO - Loss:   1.7919 | Acc: 16.73% | AUC: 0.4998
+2025-11-18 03:55:04,766 - INFO - NDCG@6: 0.5510 | MRR: 0.4086
+2025-11-18 03:56:44,572 - INFO - End Epoch [8/10], Avg Loss: 1.7919
+2025-11-18 03:56:44,573 - INFO - ______Validating______
+2025-11-18 04:02:36,454 - INFO - --- Validation Report ---
+2025-11-18 04:02:36,455 - INFO - Loss:   1.7918 | Acc: 16.63% | AUC: 0.4994
+2025-11-18 04:02:36,455 - INFO - NDCG@6: 0.5505 | MRR: 0.4080
+2025-11-18 04:04:15,002 - INFO - End Epoch [9/10], Avg Loss: 1.7919
+2025-11-18 04:04:15,003 - INFO - ______Validating______
+2025-11-18 04:09:56,888 - INFO - --- Validation Report ---
+2025-11-18 04:09:56,892 - INFO - Loss:   1.7918 | Acc: 16.54% | AUC: 0.4993
+2025-11-18 04:09:56,892 - INFO - NDCG@6: 0.5501 | MRR: 0.4075
+2025-11-18 04:11:34,261 - INFO - End Epoch [10/10], Avg Loss: 1.7919
+2025-11-18 04:11:34,262 - INFO - ______Validating______
+2025-11-18 04:17:15,573 - INFO - --- Validation Report ---
+2025-11-18 04:17:15,574 - INFO - Loss:   1.7918 | Acc: 16.68% | AUC: 0.4994
+2025-11-18 04:17:15,574 - INFO - NDCG@6: 0.5506 | MRR: 0.4082

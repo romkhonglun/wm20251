@@ -1,0 +1,67 @@
+2025-11-25 00:43:57,286 - INFO - Training DDP on 1 GPUs.
+2025-11-25 00:43:58,270 - INFO - Bắt đầu tạo user_history_map...
+2025-11-25 00:43:58,493 - INFO - Hoàn thành user_history_map: 15143 users.
+2025-11-25 00:43:59,066 - INFO - Bắt đầu tạo user_history_map...
+2025-11-25 00:43:59,257 - INFO - Hoàn thành user_history_map: 15342 users.
+2025-11-25 00:44:35,717 - INFO - End Epoch [1/10] - Train Loss: 1.6096
+2025-11-25 00:44:35,718 - INFO - ______Validating______
+2025-11-25 00:45:07,842 - INFO - --- Validation Report ---
+2025-11-25 00:45:07,843 - INFO - Loss: 1.6095 | AUC: 0.5013 | MRR: 0.4576
+2025-11-25 00:45:07,843 - INFO - NDCG@10: 0.5904 | MAP: 0.4576
+2025-11-25 00:45:07,844 - INFO - ⏱️ Validation Time: 0:00:32
+2025-11-25 00:45:07,883 - INFO - Saved new best model: checkpoints/best_model_auc_0.5013.pth
+2025-11-25 00:45:40,715 - INFO - End Epoch [2/10] - Train Loss: 1.6096
+2025-11-25 00:45:40,715 - INFO - ______Validating______
+2025-11-25 00:46:12,496 - INFO - --- Validation Report ---
+2025-11-25 00:46:12,496 - INFO - Loss: 1.6103 | AUC: 0.4996 | MRR: 0.4563
+2025-11-25 00:46:12,496 - INFO - NDCG@10: 0.5894 | MAP: 0.4563
+2025-11-25 00:46:12,496 - INFO - ⏱️ Validation Time: 0:00:31
+2025-11-25 00:46:45,469 - INFO - End Epoch [3/10] - Train Loss: 1.6096
+2025-11-25 00:46:45,470 - INFO - ______Validating______
+2025-11-25 00:47:17,895 - INFO - --- Validation Report ---
+2025-11-25 00:47:17,895 - INFO - Loss: 1.6096 | AUC: 0.5001 | MRR: 0.4565
+2025-11-25 00:47:17,895 - INFO - NDCG@10: 0.5896 | MAP: 0.4565
+2025-11-25 00:47:17,896 - INFO - ⏱️ Validation Time: 0:00:32
+2025-11-25 00:47:50,925 - INFO - End Epoch [4/10] - Train Loss: 1.6096
+2025-11-25 00:47:50,926 - INFO - ______Validating______
+2025-11-25 00:48:22,824 - INFO - --- Validation Report ---
+2025-11-25 00:48:22,825 - INFO - Loss: 1.6096 | AUC: 0.4990 | MRR: 0.4558
+2025-11-25 00:48:22,825 - INFO - NDCG@10: 0.5890 | MAP: 0.4558
+2025-11-25 00:48:22,825 - INFO - ⏱️ Validation Time: 0:00:31
+2025-11-25 00:48:55,368 - INFO - End Epoch [5/10] - Train Loss: 1.6096
+2025-11-25 00:48:55,369 - INFO - ______Validating______
+2025-11-25 00:49:27,301 - INFO - --- Validation Report ---
+2025-11-25 00:49:27,302 - INFO - Loss: 1.6096 | AUC: 0.5000 | MRR: 0.4564
+2025-11-25 00:49:27,302 - INFO - NDCG@10: 0.5895 | MAP: 0.4564
+2025-11-25 00:49:27,302 - INFO - ⏱️ Validation Time: 0:00:31
+2025-11-25 00:50:00,888 - INFO - End Epoch [6/10] - Train Loss: 1.6096
+2025-11-25 00:50:00,889 - INFO - ______Validating______
+2025-11-25 00:50:32,737 - INFO - --- Validation Report ---
+2025-11-25 00:50:32,738 - INFO - Loss: 1.6095 | AUC: 0.5009 | MRR: 0.4572
+2025-11-25 00:50:32,738 - INFO - NDCG@10: 0.5901 | MAP: 0.4572
+2025-11-25 00:50:32,738 - INFO - ⏱️ Validation Time: 0:00:31
+2025-11-25 00:51:05,528 - INFO - End Epoch [7/10] - Train Loss: 1.6096
+2025-11-25 00:51:05,529 - INFO - ______Validating______
+2025-11-25 00:51:37,007 - INFO - --- Validation Report ---
+2025-11-25 00:51:37,007 - INFO - Loss: 1.6096 | AUC: 0.4992 | MRR: 0.4564
+2025-11-25 00:51:37,007 - INFO - NDCG@10: 0.5894 | MAP: 0.4564
+2025-11-25 00:51:37,008 - INFO - ⏱️ Validation Time: 0:00:31
+2025-11-25 00:52:10,200 - INFO - End Epoch [8/10] - Train Loss: 1.6096
+2025-11-25 00:52:10,201 - INFO - ______Validating______
+2025-11-25 00:52:42,578 - INFO - --- Validation Report ---
+2025-11-25 00:52:42,578 - INFO - Loss: 1.6097 | AUC: 0.5001 | MRR: 0.4567
+2025-11-25 00:52:42,578 - INFO - NDCG@10: 0.5897 | MAP: 0.4567
+2025-11-25 00:52:42,578 - INFO - ⏱️ Validation Time: 0:00:32
+2025-11-25 00:53:15,720 - INFO - End Epoch [9/10] - Train Loss: 1.6095
+2025-11-25 00:53:15,721 - INFO - ______Validating______
+2025-11-25 00:53:47,727 - INFO - --- Validation Report ---
+2025-11-25 00:53:47,727 - INFO - Loss: 1.6095 | AUC: 0.5017 | MRR: 0.4578
+2025-11-25 00:53:47,727 - INFO - NDCG@10: 0.5906 | MAP: 0.4578
+2025-11-25 00:53:47,727 - INFO - ⏱️ Validation Time: 0:00:32
+2025-11-25 00:53:47,766 - INFO - Saved new best model: checkpoints/best_model_auc_0.5017.pth
+2025-11-25 00:54:20,624 - INFO - End Epoch [10/10] - Train Loss: 1.6096
+2025-11-25 00:54:20,624 - INFO - ______Validating______
+2025-11-25 00:54:52,190 - INFO - --- Validation Report ---
+2025-11-25 00:54:52,190 - INFO - Loss: 1.6095 | AUC: 0.5001 | MRR: 0.4569
+2025-11-25 00:54:52,190 - INFO - NDCG@10: 0.5898 | MAP: 0.4569
+2025-11-25 00:54:52,190 - INFO - ⏱️ Validation Time: 0:00:31

@@ -7,3 +7,8 @@
 *.zip
 *.pth
 *.log
+*.parquet
+*.pkl
+*.pth
+*.pt
+*.ckpt

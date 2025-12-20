@@ -6,6 +6,7 @@
 /embedding_large
 /processed_parquet
 /processed_parquet_large
+/wandb
 .env
 *.zip
 *.pth

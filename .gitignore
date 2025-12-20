@@ -2,7 +2,10 @@
 /src/checkpoints/
 /src/logs
 /.idea
-
+/embedding
+/embedding_large
+/processed_parquet
+/processed_parquet_large
 .env
 *.zip
 *.pth

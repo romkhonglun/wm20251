@@ -136,13 +136,13 @@ class NAMLLightningModule(L.LightningModule):
 
         self.log(
             "val/loss", losses["loss"],
-            on_step=True, on_epoch=True, prog_bar=True, sync_dist=True
+            on_step=False, on_epoch=True, prog_bar=True, sync_dist=True
         )
 
         if "bce_loss" in losses:
             self.log(
                 "val/bce_loss", losses["bce_loss"],
-                on_step=True, on_epoch=True
+                on_step=False, on_epoch=True
             )
 
     def on_validation_epoch_end(self):

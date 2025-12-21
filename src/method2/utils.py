@@ -80,13 +80,13 @@ class NDCG10(torchmetrics.MeanMetric):
 
 # Trong utils.py
 
-def binary_listnet_loss(y_pred, y_true, eps=1e-5, padded_value_indicator=-1):
+def binary_listnet_loss(y_pred, y_true, eps=1e-4, padded_value_indicator=-1):
     y_pred = y_pred.clone()
     y_true = y_true.clone()
 
     mask = y_true == padded_value_indicator
     # Masking bằng giá trị rất nhỏ để log_softmax hiểu là xác suất = 0
-    y_pred[mask] = -1e9
+    y_pred[mask] = -1e4
     y_true[mask] = 0.0
 
     # Normalize y_true

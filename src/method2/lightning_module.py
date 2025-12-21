@@ -11,6 +11,7 @@ from model import TIME_FEATURE_NAML, TIME_FEATURE_NAMLConfig
 from utils import MetricsMeter
 
 class NAMLLightningModule(L.LightningModule):
+
     def __init__(
             self,
             config=None,
@@ -57,12 +58,11 @@ class NAMLLightningModule(L.LightningModule):
 
         # --- Metrics Meter ---
         self.loss_weights = {"bce_loss": 1.0}
-        self.meter = MetricsMeter(self.loss_weights)
+        self.train_meter = MetricsMeter(self.loss_weights)
+        self.val_meter = MetricsMeter(self.loss_weights)
 
     def forward(self, batch):
         # Determine target dtype from model parameters (fallback to float32)
-
-
         return self.model(batch)
 
     def training_step(self, batch, batch_idx):
@@ -81,20 +81,20 @@ class NAMLLightningModule(L.LightningModule):
 
         output = self(batch)
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
-        losses = self.meter.update(meter_input)
+        # Sử dụng train_meter
+        losses = self.train_meter.update(meter_input)
 
         self.log_dict(
             {f"train/{k}": v for k, v in losses.items()},
-            on_step=True, on_epoch=True, prog_bar=True, batch_size=len(batch['hist_indices'])
+            on_step=True, on_epoch=True, prog_bar=True
         )
-
         return losses["loss"]
 
     def on_train_epoch_start(self):
-        self.meter.reset()
+        self.train_meter.reset()
 
     def on_validation_epoch_start(self):
-        self.meter.reset()
+        self.val_meter.reset()
     #
     # def training_step(self, batch, batch_idx):
     #     # Ép kiểu tất cả các tensor số thực trong batch về float32
@@ -132,34 +132,20 @@ class NAMLLightningModule(L.LightningModule):
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
 
         # Hàm update của MetricsMeter trả về dict chứa "loss"
-        losses = self.meter.update(meter_input)
+        # Sử dụng val_meter
+        losses = self.val_meter.update(meter_input)
 
-        self.log(
-            "val/loss", losses["loss"],
-            on_step=False, on_epoch=True, prog_bar=True, sync_dist=True
-        )
-
-        if "bce_loss" in losses:
-            self.log(
-                "val/bce_loss", losses["bce_loss"],
-                on_step=False, on_epoch=True
-            )
+        # Log loss theo batch mà không sợ lẫn với train step
+        self.log("val/loss", losses["loss"], on_step=False, on_epoch=True)
+        return losses["loss"]
 
     def on_validation_epoch_end(self):
-        # compute() lúc này chỉ trả về AUC, MRR, NDCG... (không có loss)
-        metrics = self.meter.compute()
+        # Tính toán kết quả từ val_meter
+        metrics = self.val_meter.compute()
+        self.log_dict({f"val/{k}": v for k, v in metrics.items()}, prog_bar=True)
 
-        self.log_dict(
-            {f"val/{k}": v for k, v in metrics.items()},
-            on_epoch=True,
-            prog_bar=True
-        )
-
-        # In ra console để theo dõi
-        print(f"\nEpoch {self.current_epoch} Val Metrics: {metrics}")
-
-        # Quan trọng: Reset meter cho epoch sau
-        self.meter.reset()
+        # Reset sau khi đã log xong kết quả epoch
+        self.val_meter.reset()
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(

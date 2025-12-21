@@ -114,7 +114,8 @@ def main():
     wandb_logger = WandbLogger(
         project="News-Rec",
         name="Method-2-Time-Features",
-        log_model=True
+        log_model=False,
+        mode = "offline"  # Change to "online" to enable online logging
     )
 
     # 5. Callbacks
@@ -127,13 +128,13 @@ def main():
         verbose=True
     )
 
-    early_stop_callback = EarlyStopping(
-        monitor="val/auc",
-        min_delta=0.0001,
-        patience=5,
-        verbose=True,
-        mode="max"
-    )
+    # early_stop_callback = EarlyStopping(
+    #     monitor="val/auc",
+    #     min_delta=0.0001,
+    #     patience=5,
+    #     verbose=True,
+    #     mode="max"
+    # )
 
     # 6. Trainer
     trainer = L.Trainer(
@@ -143,7 +144,7 @@ def main():
         logger=wandb_logger,
         callbacks=[
             checkpoint_callback,
-            early_stop_callback,
+            # early_stop_callback,
             RichModelSummary(max_depth=2),
             RichProgressBar(refresh_rate=1),
         ],

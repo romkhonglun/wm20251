@@ -60,6 +60,7 @@ def parse_args():
 
 
 def main():
+    torch.autograd.set_detect_anomaly(True)
     args = parse_args()
 
     # Set seed để đảm bảo tái lập kết quả
@@ -88,7 +89,7 @@ def main():
     # Lưu ý: embedding_path của DataModule trỏ về root_dir vì cần file article_ids.npy ở đó
     dm = NAMLDataModule(
         root_path=args.root_dir,
-        embedding_path=args.root_dir,
+        embedding_path=args.embedding_dir,
         batch_size=args.batch_size,
         history_len=args.history_len,
         neg_ratio=args.neg_ratio,

@@ -9,7 +9,7 @@ class AUC(torchmetrics.MeanMetric):
         # [FIX] Cast về float32 để tránh lỗi sort của torchmetrics trên float16
         preds = preds.to(dtype=torch.float32)
         # [FIX] Xử lý NaN nếu có
-        preds = torch.nan_to_num(preds, nan=-1e4)
+        preds = torch.nan_to_num(preds, nan=0.0)
 
         # Lọc bỏ padding (-1)
         # Lưu ý: binary_auroc cần input phẳng hoặc batch chuẩn.
@@ -34,7 +34,7 @@ class MRR(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
         # [FIX] Cast về float32 và xử lý NaN
         preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=-1e4)
+        preds = torch.nan_to_num(preds, nan=0.0)
 
         mrr_scores = []
         for _p, _l in zip(preds, labels):
@@ -54,7 +54,7 @@ class NDCG5(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
         # [FIX] Cast về float32 và xử lý NaN (QUAN TRỌNG NHẤT VỚI NDCG)
         preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=-1e4)
+        preds = torch.nan_to_num(preds, nan=0.0)
 
         ndcg_scores = []
         for _p, _l in zip(preds, labels):
@@ -74,7 +74,7 @@ class NDCG10(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
         # [FIX] Cast về float32 và xử lý NaN
         preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=-1e4)
+        preds = torch.nan_to_num(preds, nan=0.0)
 
         ndcg_scores = []
         for _p, _l in zip(preds, labels):

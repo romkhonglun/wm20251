@@ -57,6 +57,7 @@ class AdditiveAttention(nn.Module):
         super().__init__()
         self.linear = nn.Linear(input_dim, query_dim)
         self.query = nn.Parameter(torch.randn(query_dim))
+        nn.init.xavier_uniform_(self.query.unsqueeze(0))
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
 
@@ -64,8 +65,12 @@ class AdditiveAttention(nn.Module):
         proj = self.tanh(self.linear(x))
         scores = torch.matmul(proj, self.query)
         if mask is not None:
-            scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
+            # [CẢI TIẾN] Thay vì dùng min của dtype (có thể gây tràn số float16), dùng -1e4 thôi
+            # scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min) <- CŨ
+            scores = scores.masked_fill(mask, -1e4)
         weights = self.softmax(scores)
+        if torch.isnan(weights).any():
+            weights = torch.nan_to_num(weights, nan=0.0)
         return torch.sum(x * weights.unsqueeze(-1), dim=1)
 
 

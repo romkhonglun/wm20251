@@ -286,45 +286,61 @@ class NewsEncoder(nn.Module):
 # ==========================================
 # 4. MAIN MODEL
 # ==========================================
+# class VariantNAML(nn.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         self.config = config
+#         self.news_encoder = NewsEncoder(config)
+#
+#         # ==> Dùng Class mới kết hợp cả 2 cơ chế
+#         # self.user_encoder = InteractionMultiInterestUserEncoder(config)
+#         # self.user_encoder = MultiInterestUserEncoder(config)
+#         self.user_encoder = SingleInterestUserEncoder(config)
+#     def forward(self, batch):
+#         # 1. Encode History
+#         hist_idx = batch['hist_indices']
+#         hist_vecs = self.news_encoder(hist_idx)
+#
+#         hist_mask = (hist_idx == 0)
+#
+#         # Fix NaN (dự phòng ở cấp này)
+#         if hist_mask.all(dim=1).any():
+#             hist_mask[hist_mask.all(dim=1), 0] = False
+#
+#         # user_interests = self.user_encoder(
+#         #     hist_vecs,
+#         #     batch['hist_scroll'],
+#         #     batch['hist_time'],
+#         #     mask=hist_mask
+#         # )
+#         user_interests = self.user_encoder(hist_vecs, mask=hist_mask)
+#         # 2. Encode Candidates
+#         cand_vecs = self.news_encoder(batch['cand_indices'])  # [B, C, D]
+#
+#         # 3. Matching Strategy
+#         cand_vecs_T = cand_vecs.transpose(1, 2)  # [B, D, C]
+#
+#         # Scaling Dot Product
+#         dim_scale = self.config.window_size ** 0.5
+#         scores_all = torch.matmul(user_interests, cand_vecs_T) / dim_scale
+#
+#         # Max Pooling over Interests
+#         final_scores, _ = torch.max(scores_all, dim=1)  # [B, C]
+#
+#         return final_scores
+
+
 class VariantNAML(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.config = config
         self.news_encoder = NewsEncoder(config)
-
-        # ==> Dùng Class mới kết hợp cả 2 cơ chế
-        # self.user_encoder = InteractionMultiInterestUserEncoder(config)
-        # self.user_encoder = MultiInterestUserEncoder(config)
         self.user_encoder = SingleInterestUserEncoder(config)
+
     def forward(self, batch):
-        # 1. Encode History
-        hist_idx = batch['hist_indices']
-        hist_vecs = self.news_encoder(hist_idx)
+        # --- Interface chuẩn 2 tham số ---
+        hist_vecs = self.news_encoder(batch["hist_indices"])
+        user_vec = self.user_encoder(hist_vecs)
+        cand_vecs = self.news_encoder(batch["cand_indices"])
 
-        hist_mask = (hist_idx == 0)
-
-        # Fix NaN (dự phòng ở cấp này)
-        if hist_mask.all(dim=1).any():
-            hist_mask[hist_mask.all(dim=1), 0] = False
-
-        # user_interests = self.user_encoder(
-        #     hist_vecs,
-        #     batch['hist_scroll'],
-        #     batch['hist_time'],
-        #     mask=hist_mask
-        # )
-        user_interests = self.user_encoder(hist_vecs, mask=hist_mask)
-        # 2. Encode Candidates
-        cand_vecs = self.news_encoder(batch['cand_indices'])  # [B, C, D]
-
-        # 3. Matching Strategy
-        cand_vecs_T = cand_vecs.transpose(1, 2)  # [B, D, C]
-
-        # Scaling Dot Product
-        dim_scale = self.config.window_size ** 0.5
-        scores_all = torch.matmul(user_interests, cand_vecs_T) / dim_scale
-
-        # Max Pooling over Interests
-        final_scores, _ = torch.max(scores_all, dim=1)  # [B, C]
-
-        return final_scores
+        scores = torch.bmm(cand_vecs, user_vec.unsqueeze(2)).squeeze(2)
+        return scores

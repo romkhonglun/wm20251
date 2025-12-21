@@ -258,7 +258,7 @@ class SingleInterestUserEncoder(nn.Module):
 
     def forward(self, news_vecs, mask=None):
         user_vec = self.attention(news_vecs, mask=mask)
-        return user_vec.unsqueeze(1)
+        return user_vec
 
 class NewsEncoder(nn.Module):
     def __init__(self, config):

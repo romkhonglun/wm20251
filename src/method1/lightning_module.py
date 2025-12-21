@@ -119,29 +119,29 @@ class NAMLLightningModule(pl.LightningModule):
         # Sử dụng CosineAnnealingLR
         # T_max: Quy định số epoch để LR giảm từ max xuống min.
         #        Ta lấy luôn self.trainer.max_epochs (được set từ train.py)
-        # scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        #     optimizer,
-        #     T_max=self.trainer.max_epochs,
-        #     eta_min=1e-4  # LR tối thiểu không bao giờ xuống thấp hơn mức này
-        # )
-        total_steps = getattr(self.hparams, "scheduler_total_steps", None)
-
-        if total_steps is None or total_steps <= 0:
-            total_steps = 10000
-        print(f"total_steps for OneCycleLR: {total_steps}")
-        max_lr = getattr(self.hparams, "scheduler_max_lr", 3e-3)
-
-        if max_lr is None:
-            max_lr = 3e-3
-
-        print(f"total_steps for OneCycleLR: {total_steps}, max_lr: {max_lr}")
-        scheduler = optim.lr_scheduler.OneCycleLR(
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            max_lr=max_lr,
-            total_steps=total_steps,
-            pct_start=0.1,
-            anneal_strategy="cos"
+            T_max=self.trainer.max_epochs,
+            eta_min=1e-4  # LR tối thiểu không bao giờ xuống thấp hơn mức này
         )
+        # total_steps = getattr(self.hparams, "scheduler_total_steps", None)
+        #
+        # if total_steps is None or total_steps <= 0:
+        #     total_steps = 10000
+        # print(f"total_steps for OneCycleLR: {total_steps}")
+        # max_lr = getattr(self.hparams, "scheduler_max_lr", 3e-3)
+        #
+        # if max_lr is None:
+        #     max_lr = 3e-3
+        #
+        # print(f"total_steps for OneCycleLR: {total_steps}, max_lr: {max_lr}")
+        # scheduler = optim.lr_scheduler.OneCycleLR(
+        #     optimizer,
+        #     max_lr=max_lr,
+        #     total_steps=total_steps,
+        #     pct_start=0.1,
+        #     anneal_strategy="cos"
+        # )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

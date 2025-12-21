@@ -56,8 +56,7 @@ class AdditiveAttention(nn.Module):
     def __init__(self, input_dim, query_dim):
         super().__init__()
         self.linear = nn.Linear(input_dim, query_dim)
-        # Nên dùng
-        nn.init.xavier_uniform_(self.query.unsqueeze(0))
+        self.query = nn.Parameter(torch.randn(query_dim))
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
 

@@ -129,7 +129,7 @@ def main():
         ],
         max_epochs=args.epochs,
         precision="16-mixed",  # Mixed precision giúp train nhanh hơn và ít VRAM hơn
-        gradient_clip_val=0.5,  # Chống bùng nổ gradient
+        # gradient_clip_val=0.5,  # Chống bùng nổ gradient
         log_every_n_steps=50
     )
 

@@ -16,61 +16,68 @@ class NAMLLightningModule(pl.LightningModule):
         self.config = config
         self.embedding_dir = embedding_dir
 
-        # --- 1. LOAD PRETRAINED EMBEDDINGS TRƯỚC ---
-        embeddings_dict = self._load_embeddings_data()
-
-        # --- 2. CẬP NHẬT CONFIG TỪ DỮ LIỆU THỰC TẾ ---
-        if embeddings_dict is not None:
-            # Lấy dimension thực tế từ file title_emb (ví dụ 768 thay vì 1024 mặc định)
-            real_dim = embeddings_dict['title'].shape[1]
-            if self.config.embedding_dim != real_dim:
-                print(f"ℹ️ Updating embedding_dim from {self.config.embedding_dim} to {real_dim}")
-                self.config.embedding_dim = real_dim
 
         # --- 3. KHỞI TẠO MODEL VỚI EMBEDDING ĐÃ LOAD ---
         # Truyền embeddings_dict vào thẳng model
-        self.model = VariantNAML(self.config, pretrained_embeddings=embeddings_dict)
+        self.model = VariantNAML(self.config)
 
         # --- 4. METRICS & LOSS ---
         self.loss_weights = {"bce_loss": 1.0}
         self.train_meter = MetricsMeter(self.loss_weights)
         self.val_meter = MetricsMeter(self.loss_weights)
 
-    def _load_embeddings_data(self):
-        """Hàm helper chỉ để load data lên RAM/Tensor"""
+        self._init_embeddings()
+
+    def _init_embeddings(self):
         print(f"Loading embedding weights from {self.embedding_dir}...")
         try:
-            # Load mmap_mode='r' để không tốn RAM nếu file lớn, nhưng nếu cần GPU thì nên copy
-            # Ở đây ta load full vào RAM rồi chuyển sang Tensor
-            title_w = np.load(f"{self.embedding_dir}/title_emb.npy")
-            body_w = np.load(f"{self.embedding_dir}/body_emb.npy")
-            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy")
+            # Load mmap (chế độ chỉ đọc, tiết kiệm RAM)
+            title_w = np.load(f"{self.embedding_dir}/title_emb.npy", mmap_mode='r')
+            body_w = np.load(f"{self.embedding_dir}/body_emb.npy", mmap_mode='r')
+            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy", mmap_mode='r')
 
-            print(f"✅ Loaded embeddings: Title={title_w.shape}, Body={body_w.shape}")
+            # Convert sang Tensor
+            title_tensor = torch.from_numpy(title_w).float()
+            body_tensor = torch.from_numpy(body_w).float()
+            cat_tensor = torch.from_numpy(cat_w).float()
 
-            return {
-                'title': torch.from_numpy(title_w).float(),
-                'body': torch.from_numpy(body_w).float(),
-                'cat': torch.from_numpy(cat_w).float()
-            }
+            # Inject vào NewsEncoder
+            self.model.news_encoder.title_emb = nn.Embedding.from_pretrained(title_tensor, freeze=True, padding_idx=0)
+            self.model.news_encoder.body_emb = nn.Embedding.from_pretrained(body_tensor, freeze=True, padding_idx=0)
+            self.model.news_encoder.cat_emb = nn.Embedding.from_pretrained(cat_tensor, freeze=True, padding_idx=0)
+
+            print("✅ Embeddings injected successfully.")
+            # Xóa biến tạm
+            del title_w, body_w, cat_w, title_tensor, body_tensor, cat_tensor
+
         except Exception as e:
-            print(f"⚠️ Warning: Could not load embeddings ({e}). Model will use Random Init.")
-            return None
+            print(f"⚠️ Warning: Could not load embeddings ({e}). Using random init.")
 
     def forward(self, batch):
         return self.model(batch)
 
     def training_step(self, batch, batch_idx):
-        preds = self(batch)
-        meter_input = {"preds": preds, "labels": batch["label_click"]}
+        output = self(batch)
+        meter_input = {"preds": output["preds"], "labels": batch["labels"]}
+        # Sử dụng train_meter
         losses = self.train_meter.update(meter_input)
-        self.log("train/loss", losses["loss"], on_step=True, on_epoch=True, prog_bar=True)
+
+        self.log_dict(
+            {f"train/{k}": v for k, v in losses.items()},
+            on_step=True, on_epoch=True, prog_bar=True
+        )
         return losses["loss"]
 
     def validation_step(self, batch, batch_idx):
-        preds = self(batch)
-        meter_input = {"preds": preds, "labels": batch["label_click"]}
-        self.val_meter.update(meter_input)
+        output = self(batch)
+        meter_input = {"preds": output["preds"], "labels": batch["labels"]}
+
+        # Hàm update của MetricsMeter trả về dict chứa "loss"
+        # Sử dụng val_meter
+        losses = self.val_meter.update(meter_input)
+
+        # Log loss theo batch mà không sợ lẫn với train step
+        self.log("val/loss", losses["loss"], on_step=False, on_epoch=True)
 
     def on_train_epoch_start(self):
         self.train_meter.reset()
@@ -80,9 +87,9 @@ class NAMLLightningModule(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         metrics = self.val_meter.compute()
-        for k, v in metrics.items():
-            self.log(f"val/{k}", v, prog_bar=(k == "auc"))
-        print(f"\nEpoch Metrics: AUC={metrics.get('auc', 0):.4f}")
+        self.log_dict({f"val/{k}": v for k, v in metrics.items()}, prog_bar=True)
+
+        # Reset sau khi đã log xong kết quả epoch
         self.val_meter.reset()
 
     def configure_optimizers(self):

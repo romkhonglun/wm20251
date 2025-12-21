@@ -72,10 +72,10 @@ class NAMLIterableDataset(IterableDataset):
 
         # 3. Clean Data đơn giản (Fill Null = 0)
         # Không còn logic WPM phức tạp, chỉ đảm bảo không có NaN
-        q = q.with_columns([
-            pl.col("hist_time").fill_null(0.0),
-            pl.col("hist_scroll").fill_null(0.0)
-        ])
+        # q = q.with_columns([
+        #     pl.col("hist_time").fill_null(0.0),
+        #     pl.col("hist_scroll").fill_null(0.0)
+        # ])
 
         q = q.filter(pl.col("article_id").is_not_null())
 
@@ -156,7 +156,7 @@ class NAMLIterableDataset(IterableDataset):
             # "hist_scroll": torch.FloatTensor(h_scr),
             # "hist_time": torch.FloatTensor(h_tim),
             "cand_indices": torch.LongTensor(cand_indices),
-            "label_click": torch.Tensor([1.0] + [0.0] * self.neg_ratio)
+            "labels": torch.Tensor([1.0] + [0.0] * self.neg_ratio)
         }
 
     def _stream_from_parquet(self):

@@ -110,7 +110,7 @@ class MetricsMeter(torch.nn.Module):
         else:
             self.loss_weights = loss_weights
 
-        self.bce_loss = torch.nn.BCEWithLogitsLoss(reduction="none")
+        self.bce_loss = torch.nn.BCEWithLogitsLoss()
 
         # Thêm mrr vào đây
         self.eval_metrics = torchmetrics.MetricCollection({

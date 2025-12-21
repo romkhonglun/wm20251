@@ -10,7 +10,7 @@ class VariantNAMLConfig:
     def __init__(self):
         # --- Dimensions ---
         self.embedding_dim = 1024
-        self.window_size = 256  # d_model
+        self.window_size = 400  # d_model
 
         # --- Multi-Interest Specs ---
         self.num_interests = 5  # K = 5 vector sở thích
@@ -18,7 +18,7 @@ class VariantNAMLConfig:
         # --- Internal Specs ---
         self.query_vector_dim = 200
         self.dropout = 0.2
-        self.num_res_blocks = 2
+        self.num_res_blocks = 3
         self.nhead = 4  # Số head cho Transformer
         self.num_interaction_features = 2
 
@@ -44,7 +44,7 @@ class DeepProjector(nn.Module):
         self.compress_layer = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout)
         )
         self.deep_stack = nn.Sequential(*[ResBlock(hidden_dim, dropout) for _ in range(num_res_blocks)])
@@ -57,7 +57,6 @@ class AdditiveAttention(nn.Module):
         super().__init__()
         self.linear = nn.Linear(input_dim, query_dim)
         self.query = nn.Parameter(torch.randn(query_dim))
-        nn.init.xavier_uniform_(self.query.unsqueeze(0))
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
 
@@ -65,8 +64,6 @@ class AdditiveAttention(nn.Module):
         proj = self.tanh(self.linear(x))
         scores = torch.matmul(proj, self.query)
         if mask is not None:
-            # [CẢI TIẾN] Thay vì dùng min của dtype (có thể gây tràn số float16), dùng -1e4 thôi
-            # scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min) <- CŨ
             scores = scores.masked_fill(mask, -1e4)
         weights = self.softmax(scores)
         if torch.isnan(weights).any():
@@ -78,183 +75,183 @@ class AdditiveAttention(nn.Module):
 # 3. ENCODERS
 # ==========================================
 
-class InteractionMultiInterestUserEncoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dim = config.window_size
-        self.num_interests = config.num_interests
-
-        # --- CẢI TIẾN: GATING NETWORK ---
-        # Thay vì projection thông thường, ta xây dựng mạng Gate
-        # Input: 2 (Scroll, Time) -> Output: 1 (Hệ số alpha từ 0-1)
-        self.gate_net = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()  # Quan trọng: Ép giá trị về [0, 1]
-        )
-
-        # Vẫn giữ lại projection để cộng thêm thông tin ngữ cảnh thời gian (nếu muốn)
-        # Hoặc có thể bỏ đi để tiết kiệm. Ở đây ta giữ lại để model vừa "lọc" vừa "hiểu".
-        self.context_proj = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.ReLU(),
-            nn.Linear(64, self.dim)
-        )
-        self.layer_norm = nn.LayerNorm(self.dim)
-
-        # Transformer Encoder (Giữ nguyên)
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=self.dim,
-            nhead=config.nhead,
-            dim_feedforward=self.dim * 4,
-            dropout=config.dropout,
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
-
-        # Multi-Interest Module (Giữ nguyên)
-        self.interest_queries = nn.Parameter(torch.randn(self.num_interests, self.dim))
-        nn.init.xavier_uniform_(self.interest_queries)
-        self.interest_attn = nn.MultiheadAttention(
-            embed_dim=self.dim,
-            num_heads=config.nhead,
-            batch_first=True
-        )
-
-    def forward(self, news_vecs, scrolls, times, mask=None):
-        # 1. Tạo features hành vi
-        # behaviors: [Batch, Seq, 2]
-        behaviors = torch.stack([scrolls, times], dim=-1)
-
-        # ---------------------------------------------------------
-        # CÁCH MỚI: GATING MECHANISM (Lọc nhiễu clickbait)
-        # ---------------------------------------------------------
-
-        # Tính hệ số quan trọng (alpha) cho từng bài đã đọc
-        # alpha: [Batch, Seq, 1] (Giá trị từ 0.0 đến 1.0)
-        # Bài nào đọc < 5s hoặc scroll 0% -> alpha sẽ tự học về gần 0
-        alpha = self.gate_net(behaviors)
-
-        # Nhân bản alpha để khớp dimension với news_vecs
-        # [B, S, 1] * [B, S, Dim] -> [B, S, Dim]
-        # Phép nhân này sẽ "làm mờ" những bài có alpha thấp (click nhầm)
-        news_vecs_gated = news_vecs * alpha
-
-        # (Tùy chọn) Vẫn cộng thêm thông tin ngữ cảnh thời gian
-        # để model biết "bài này đọc vào lúc nào/bao lâu" dù nó bị làm mờ
-        context_emb = self.context_proj(behaviors)
-
-        # Residual Connection
-        # Input cho Transformer giờ là vector ĐÃ ĐƯỢC LỌC
-        combined = self.layer_norm(news_vecs_gated + context_emb)
-
-        # ---------------------------------------------------------
-
-        # FIX NaN (Giữ nguyên từ bước trước)
-        if mask is not None:
-            is_all_masked = mask.all(dim=1)
-            if is_all_masked.any():
-                mask[is_all_masked, 0] = False
-
-        # 2. Interaction Modeling (Transformer)
-        seq_rep = self.transformer(combined, src_key_padding_mask=mask)
-
-        # 3. Multi-Interest Extraction
-        batch_size = seq_rep.size(0)
-        queries = self.interest_queries.unsqueeze(0).expand(batch_size, -1, -1)
-
-        user_interests, _ = self.interest_attn(
-            query=queries,
-            key=seq_rep,
-            value=seq_rep,
-            key_padding_mask=mask
-        )
-
-        return user_interests
-
-class MultiInterestUserEncoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dim = config.window_size
-        self.num_interests = config.num_interests
-
-        # --- CẢI TIẾN: GATING NETWORK ---
-        # Input: 2 (Scroll, Time) -> Output: 1 (Hệ số alpha từ 0-1)
-        self.gate_net = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()  # Ép giá trị về [0, 1]
-        )
-
-        # Projection ngữ cảnh (giữ lại để model hiểu ngữ cảnh thời gian)
-        self.context_proj = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.ReLU(),
-            nn.Linear(64, self.dim)
-        )
-        self.layer_norm = nn.LayerNorm(self.dim)
-
-        # Transformer Encoder
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=self.dim,
-            nhead=config.nhead,
-            dim_feedforward=self.dim * 4,
-            dropout=config.dropout,
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
-
-        # Multi-Interest Module
-        self.interest_queries = nn.Parameter(torch.randn(self.num_interests, self.dim))
-        nn.init.xavier_uniform_(self.interest_queries)
-        self.interest_attn = nn.MultiheadAttention(
-            embed_dim=self.dim,
-            num_heads=config.nhead,
-            batch_first=True
-        )
-
-    def forward(self, news_vecs, scrolls, times, mask=None):
-        # 1. Tạo features hành vi
-        behaviors = torch.stack([scrolls, times], dim=-1)
-
-        # --- GATING MECHANISM ---
-        # Tính alpha (độ quan trọng) dựa trên hành vi
-        alpha = self.gate_net(behaviors)
-
-        # "Làm mờ" các bài clickbait/đọc lướt
-        news_vecs_gated = news_vecs * alpha
-
-        # Cộng thông tin ngữ cảnh thời gian
-        context_emb = self.context_proj(behaviors)
-
-        # Residual Connection
-        combined = self.layer_norm(news_vecs_gated + context_emb)
-
-        # FIX NaN: Đảm bảo không mask toàn bộ chuỗi
-        if mask is not None:
-            is_all_masked = mask.all(dim=1)
-            if is_all_masked.any():
-                mask[is_all_masked, 0] = False
-
-        # 2. Interaction Modeling (Transformer)
-        seq_rep = self.transformer(combined, src_key_padding_mask=mask)
-
-        # 3. Multi-Interest Extraction
-        batch_size = seq_rep.size(0)
-        queries = self.interest_queries.unsqueeze(0).expand(batch_size, -1, -1)
-
-        user_interests, _ = self.interest_attn(
-            query=queries,
-            key=seq_rep,
-            value=seq_rep,
-            key_padding_mask=mask
-        )
-
-        return user_interests
+# class InteractionMultiInterestUserEncoder(nn.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         self.dim = config.window_size
+#         self.num_interests = config.num_interests
+#
+#         # --- CẢI TIẾN: GATING NETWORK ---
+#         # Thay vì projection thông thường, ta xây dựng mạng Gate
+#         # Input: 2 (Scroll, Time) -> Output: 1 (Hệ số alpha từ 0-1)
+#         self.gate_net = nn.Sequential(
+#             nn.Linear(2, 64),
+#             nn.ReLU(),
+#             nn.Linear(64, 1),
+#             nn.Sigmoid()  # Quan trọng: Ép giá trị về [0, 1]
+#         )
+#
+#         # Vẫn giữ lại projection để cộng thêm thông tin ngữ cảnh thời gian (nếu muốn)
+#         # Hoặc có thể bỏ đi để tiết kiệm. Ở đây ta giữ lại để model vừa "lọc" vừa "hiểu".
+#         self.context_proj = nn.Sequential(
+#             nn.Linear(2, 64),
+#             nn.ReLU(),
+#             nn.Linear(64, self.dim)
+#         )
+#         self.layer_norm = nn.LayerNorm(self.dim)
+#
+#         # Transformer Encoder (Giữ nguyên)
+#         enc_layer = nn.TransformerEncoderLayer(
+#             d_model=self.dim,
+#             nhead=config.nhead,
+#             dim_feedforward=self.dim * 4,
+#             dropout=config.dropout,
+#             batch_first=True,
+#             norm_first=True
+#         )
+#         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
+#
+#         # Multi-Interest Module (Giữ nguyên)
+#         self.interest_queries = nn.Parameter(torch.randn(self.num_interests, self.dim))
+#         nn.init.xavier_uniform_(self.interest_queries)
+#         self.interest_attn = nn.MultiheadAttention(
+#             embed_dim=self.dim,
+#             num_heads=config.nhead,
+#             batch_first=True
+#         )
+#
+#     def forward(self, news_vecs, scrolls, times, mask=None):
+#         # 1. Tạo features hành vi
+#         # behaviors: [Batch, Seq, 2]
+#         behaviors = torch.stack([scrolls, times], dim=-1)
+#
+#         # ---------------------------------------------------------
+#         # CÁCH MỚI: GATING MECHANISM (Lọc nhiễu clickbait)
+#         # ---------------------------------------------------------
+#
+#         # Tính hệ số quan trọng (alpha) cho từng bài đã đọc
+#         # alpha: [Batch, Seq, 1] (Giá trị từ 0.0 đến 1.0)
+#         # Bài nào đọc < 5s hoặc scroll 0% -> alpha sẽ tự học về gần 0
+#         alpha = self.gate_net(behaviors)
+#
+#         # Nhân bản alpha để khớp dimension với news_vecs
+#         # [B, S, 1] * [B, S, Dim] -> [B, S, Dim]
+#         # Phép nhân này sẽ "làm mờ" những bài có alpha thấp (click nhầm)
+#         news_vecs_gated = news_vecs * alpha
+#
+#         # (Tùy chọn) Vẫn cộng thêm thông tin ngữ cảnh thời gian
+#         # để model biết "bài này đọc vào lúc nào/bao lâu" dù nó bị làm mờ
+#         context_emb = self.context_proj(behaviors)
+#
+#         # Residual Connection
+#         # Input cho Transformer giờ là vector ĐÃ ĐƯỢC LỌC
+#         combined = self.layer_norm(news_vecs_gated + context_emb)
+#
+#         # ---------------------------------------------------------
+#
+#         # FIX NaN (Giữ nguyên từ bước trước)
+#         if mask is not None:
+#             is_all_masked = mask.all(dim=1)
+#             if is_all_masked.any():
+#                 mask[is_all_masked, 0] = False
+#
+#         # 2. Interaction Modeling (Transformer)
+#         seq_rep = self.transformer(combined, src_key_padding_mask=mask)
+#
+#         # 3. Multi-Interest Extraction
+#         batch_size = seq_rep.size(0)
+#         queries = self.interest_queries.unsqueeze(0).expand(batch_size, -1, -1)
+#
+#         user_interests, _ = self.interest_attn(
+#             query=queries,
+#             key=seq_rep,
+#             value=seq_rep,
+#             key_padding_mask=mask
+#         )
+#
+#         return user_interests
+#
+# class MultiInterestUserEncoder(nn.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         self.dim = config.window_size
+#         self.num_interests = config.num_interests
+#
+#         # --- CẢI TIẾN: GATING NETWORK ---
+#         # Input: 2 (Scroll, Time) -> Output: 1 (Hệ số alpha từ 0-1)
+#         self.gate_net = nn.Sequential(
+#             nn.Linear(2, 64),
+#             nn.ReLU(),
+#             nn.Linear(64, 1),
+#             nn.Sigmoid()  # Ép giá trị về [0, 1]
+#         )
+#
+#         # Projection ngữ cảnh (giữ lại để model hiểu ngữ cảnh thời gian)
+#         self.context_proj = nn.Sequential(
+#             nn.Linear(2, 64),
+#             nn.ReLU(),
+#             nn.Linear(64, self.dim)
+#         )
+#         self.layer_norm = nn.LayerNorm(self.dim)
+#
+#         # Transformer Encoder
+#         enc_layer = nn.TransformerEncoderLayer(
+#             d_model=self.dim,
+#             nhead=config.nhead,
+#             dim_feedforward=self.dim * 4,
+#             dropout=config.dropout,
+#             batch_first=True,
+#             norm_first=True
+#         )
+#         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
+#
+#         # Multi-Interest Module
+#         self.interest_queries = nn.Parameter(torch.randn(self.num_interests, self.dim))
+#         nn.init.xavier_uniform_(self.interest_queries)
+#         self.interest_attn = nn.MultiheadAttention(
+#             embed_dim=self.dim,
+#             num_heads=config.nhead,
+#             batch_first=True
+#         )
+#
+#     def forward(self, news_vecs, scrolls, times, mask=None):
+#         # 1. Tạo features hành vi
+#         behaviors = torch.stack([scrolls, times], dim=-1)
+#
+#         # --- GATING MECHANISM ---
+#         # Tính alpha (độ quan trọng) dựa trên hành vi
+#         alpha = self.gate_net(behaviors)
+#
+#         # "Làm mờ" các bài clickbait/đọc lướt
+#         news_vecs_gated = news_vecs * alpha
+#
+#         # Cộng thông tin ngữ cảnh thời gian
+#         context_emb = self.context_proj(behaviors)
+#
+#         # Residual Connection
+#         combined = self.layer_norm(news_vecs_gated + context_emb)
+#
+#         # FIX NaN: Đảm bảo không mask toàn bộ chuỗi
+#         if mask is not None:
+#             is_all_masked = mask.all(dim=1)
+#             if is_all_masked.any():
+#                 mask[is_all_masked, 0] = False
+#
+#         # 2. Interaction Modeling (Transformer)
+#         seq_rep = self.transformer(combined, src_key_padding_mask=mask)
+#
+#         # 3. Multi-Interest Extraction
+#         batch_size = seq_rep.size(0)
+#         queries = self.interest_queries.unsqueeze(0).expand(batch_size, -1, -1)
+#
+#         user_interests, _ = self.interest_attn(
+#             query=queries,
+#             key=seq_rep,
+#             value=seq_rep,
+#             key_padding_mask=mask
+#         )
+#
+#         return user_interests
 
 class SingleInterestUserEncoder(nn.Module):
     def __init__(self, config):
@@ -271,10 +268,9 @@ class NewsEncoder(nn.Module):
         super().__init__()
 
         print("⚡ NewsEncoder: Initializing with Pretrained Embeddings")
-        self.title_emb = nn.Embedding.from_pretrained(pretrained_embeddings['title'], freeze=True, padding_idx=0)
-        self.body_emb = nn.Embedding.from_pretrained(pretrained_embeddings['body'], freeze=True, padding_idx=0)
-        self.cat_emb = nn.Embedding.from_pretrained(pretrained_embeddings['cat'], freeze=True, padding_idx=0)
-
+        self.title_emb = nn.Embedding(1,config.embedding_dim)
+        self.body_emb = nn.Embedding(1,config.embedding_dim)
+        self.cat_emb = nn.Embedding(1,config.embedding_dim)
         # Các lớp Projection (quan trọng: config.embedding_dim lúc này đã được update ở LightningModule)
         self.title_proj = DeepProjector(config.embedding_dim, config.window_size, config.num_res_blocks, config.dropout)
         self.body_proj = DeepProjector(config.embedding_dim, config.window_size, config.num_res_blocks, config.dropout)
@@ -347,7 +343,7 @@ class VariantNAML(nn.Module):
         super().__init__()
         # Truyền embeddings xuống NewsEncoder
         self.news_encoder = NewsEncoder(config, pretrained_embeddings)
-
+        self.config = config
         # User Encoder (Giữ nguyên class bạn đang dùng)
         self.user_encoder = SingleInterestUserEncoder(config)
 
@@ -357,5 +353,8 @@ class VariantNAML(nn.Module):
         cand_vecs = self.news_encoder(batch["cand_indices"])
 
         scores = torch.bmm(cand_vecs, user_vec.unsqueeze(2)).squeeze(2)
-        scores = F.logsigmoid(scores)
-        return scores
+        scores = scores / (self.config.window_size ** 0.5)
+        return {
+            "preds": scores,
+            "labels": batch.get("labels", None)
+        }

@@ -15,8 +15,12 @@ from itertools import islice
 class NewsEmbeddingManager:
     def __init__(self, processed_dir):
         self.processed_dir = Path(processed_dir)
-        # Load ID từ npy (đã được tiền xử lý)
-        self.art_ids = np.load(self.processed_dir / "article_ids.npy")
+        try:
+            self.art_ids = np.load(self.processed_dir / "article_ids.npy")
+        except FileNotFoundError:
+            print("⚠️ Warning: article_ids.npy not found. Using empty mapping.")
+            self.art_ids = np.array([])
+
         self.nid2index = {str(nid): i for i, nid in enumerate(self.art_ids)}
 
     def map_ids_to_indices(self, id_list):
@@ -26,15 +30,15 @@ class NewsEmbeddingManager:
 
 
 # ==========================================
-# 2. DATASET (STREAMING & MULTI-TASK)
+# 2. DATASET (STREAMING & SIMPLE FEATURES)
 # ==========================================
 class NAMLIterableDataset(IterableDataset):
-    def __init__(self, behaviors_path, history_path, articles_path, embedding_manager,
+    def __init__(self, behaviors_path, history_path, embedding_manager,
                  history_len=30, neg_ratio=4, batch_size=32,
                  mode='train', shuffle_buffer_size=10000, seed=42):
         super().__init__()
         self.behaviors_path = behaviors_path
-        self.articles_path = articles_path
+        # Không cần articles_path nữa vì không tính WPM
         self.embedding_manager = embedding_manager
         self.history_len = history_len
         self.neg_ratio = neg_ratio
@@ -43,60 +47,54 @@ class NAMLIterableDataset(IterableDataset):
         self.shuffle_buffer_size = shuffle_buffer_size if mode == 'train' else 0
         self.seed = seed
 
-        # Load mapping user -> history ngay khi khởi tạo
-        self.user_history = self._load_history_with_wpm(history_path)
-
-    def _load_history_with_wpm(self, history_path):
-        print(f"[{self.mode.upper()}] Loading history & Pre-calculating interaction features...")
-
-        # Load articles để lấy độ dài văn bản (phục vụ tính WPM)
-        lf_art = pl.scan_parquet(self.articles_path).select([
-            pl.col("article_id").cast(pl.String),
-            pl.col("body").fill_null("").str.split(" ").list.len().alias("word_count")
-        ])
-
         # Load history
+        self.user_history = self._load_history_simple(history_path)
+
+    def _load_history_simple(self, history_path):
+        """
+        Load History và chỉ lấy Time/Scroll thô (Raw Features).
+        Không tính toán WPM hay heuristic phức tạp.
+        """
+        print(f"[{self.mode.upper()}] Loading history (Simple Mode: Raw Time & Scroll)...")
+
+        # 1. Load History từ file Parquet (Chỉ lấy cột cần thiết)
         lf_hist = pl.scan_parquet(history_path).select([
             pl.col("user_id"),
-            pl.col("article_id_fixed"),
-            pl.col("impression_time_fixed"),
-            pl.col("scroll_percentage_fixed"),
-            pl.col("read_time_fixed")
+            pl.col("hist_ids"),
+            pl.col("hist_ts"),
+            pl.col("hist_scroll"),
+            pl.col("hist_time")
         ])
 
-        # Explode và xử lý kiểu dữ liệu
-        q = lf_hist.explode(["article_id_fixed", "scroll_percentage_fixed", "read_time_fixed", "impression_time_fixed"])
-        q = q.rename({"article_id_fixed": "article_id"}).with_columns(pl.col("article_id").cast(pl.String))
+        # 2. Explode (Trải phẳng)
+        q = lf_hist.explode(["hist_ids", "hist_scroll", "hist_time", "hist_ts"])
+        q = q.rename({"hist_ids": "article_id"}).with_columns(pl.col("article_id").cast(pl.String))
 
-        # Join với article info
-        q = q.join(lf_art, on="article_id", how="left")
+        # 3. Clean Data đơn giản (Fill Null = 0)
+        # Không còn logic WPM phức tạp, chỉ đảm bảo không có NaN
         q = q.with_columns([
-            pl.col("read_time_fixed").fill_null(0.0),
-            pl.col("word_count").fill_null(0)
+            pl.col("hist_time").fill_null(0.0),
+            pl.col("hist_scroll").fill_null(0.0)
         ])
 
-        # Logic WPM và Scroll (như đã thống nhất)
-        wpm_expr = (pl.col("word_count") / pl.col("read_time_fixed") * 60).fill_nan(9999).fill_null(0)
-        scroll_logic = (
-            pl.when(pl.col("read_time_fixed") < 5.0).then(0.0)
-            .when(wpm_expr < 300).then(100.0)
-            .when(wpm_expr > 500).then(0.0)
-            .otherwise((500 - wpm_expr) / 2.0)
-        )
-
-        q = q.with_columns(pl.col("scroll_percentage_fixed").fill_null(scroll_logic))
         q = q.filter(pl.col("article_id").is_not_null())
 
-        df = q.sort(["user_id", "impression_time_fixed"]).collect()
+        # Collect về DataFrame
+        df = q.sort(["user_id", "hist_ts"]).collect()
 
-        # Chuyển sang format mảng để truy xuất nhanh (CSR-like)
+        # 4. Chuyển đổi sang Numpy
         raw_nids = df["article_id"].to_list()
         mapped_indices = self.embedding_manager.map_ids_to_indices(raw_nids)
 
         all_indices = np.array(mapped_indices, dtype=np.int32)
-        all_scrolls = (df["scroll_percentage_fixed"].to_numpy() / 100.0).astype(np.float32)  # Normalize 0-1
-        all_times = np.log1p(df["read_time_fixed"].to_numpy().astype(np.float32))
 
+        # Normalize Scroll về [0, 1] (Giả sử dữ liệu gốc là 0-100)
+        all_scrolls = (df["hist_scroll"].to_numpy() / 100.0).astype(np.float32)
+
+        # Log Normalize Time để giảm độ lệch (skewness) của dữ liệu thời gian
+        all_times = np.log1p(df["hist_time"].to_numpy().astype(np.float32))
+
+        # Tạo Index Map
         user_counts = df.group_by("user_id", maintain_order=True).len()
         users = user_counts["user_id"].to_list()
         lengths = user_counts["len"].to_numpy()
@@ -110,7 +108,7 @@ class NAMLIterableDataset(IterableDataset):
         return {"map": user_map, "indices": all_indices, "scrolls": all_scrolls, "times": all_times}
 
     def _process_row(self, user_id, clicked_ids, inview_ids):
-        # 1. History Extraction & Padding
+        # 1. Truy xuất & Padding History
         if user_id in self.user_history["map"]:
             start, length = self.user_history["map"][user_id]
             h_idx = self.user_history["indices"][start: start + length]
@@ -119,7 +117,7 @@ class NAMLIterableDataset(IterableDataset):
         else:
             h_idx = h_scr = h_tim = np.array([], dtype=np.float32)
 
-        # Truncate/Pad
+        # Cắt hoặc Pad
         if len(h_idx) < self.history_len:
             pad_len = self.history_len - len(h_idx)
             h_idx = np.pad(h_idx, (0, pad_len), 'constant')
@@ -146,17 +144,17 @@ class NAMLIterableDataset(IterableDataset):
             else:
                 neg_ids = (neg_pool * (self.neg_ratio // max(1, len(neg_pool)) + 1))[:self.neg_ratio]
         else:
-            neg_ids = neg_pool[:self.neg_ratio] if len(neg_pool) >= self.neg_ratio else (neg_pool * self.neg_ratio)[
-                                                                                        :self.neg_ratio]
+            neg_ids = neg_pool[:self.neg_ratio]
+            if len(neg_ids) < self.neg_ratio:
+                neg_ids += [pos_id] * (self.neg_ratio - len(neg_ids))
 
         cand_ids = [pos_id] + neg_ids
         cand_indices = self.embedding_manager.map_ids_to_indices(cand_ids)
 
-        # 3. Return Dictionary (Phải khớp chính xác key với VariantNAML.forward)
         return {
             "hist_indices": torch.LongTensor(h_idx),
-            "hist_scroll": torch.FloatTensor(h_scr),  # Đổi từ hist_scrolls -> hist_scroll
-            "hist_time": torch.FloatTensor(h_tim),  # Đổi từ hist_times -> hist_time
+            "hist_scroll": torch.FloatTensor(h_scr),
+            "hist_time": torch.FloatTensor(h_tim),
             "cand_indices": torch.LongTensor(cand_indices),
             "label_click": torch.FloatTensor([1.0] + [0.0] * self.neg_ratio)
         }
@@ -165,8 +163,8 @@ class NAMLIterableDataset(IterableDataset):
         pq_file = pq.ParquetFile(self.behaviors_path)
         for batch in pq_file.iter_batches(batch_size=self.batch_size * 50):
             u_ids = batch["user_id"]
-            c_cols = batch["article_ids_clicked"]
-            i_cols = batch["article_ids_inview"]
+            c_cols = batch["clk_ids"]
+            i_cols = batch["inv_ids"]
             for i in range(len(batch)):
                 yield self._process_row(u_ids[i].as_py(), c_cols[i].as_py(), i_cols[i].as_py())
 
@@ -175,7 +173,6 @@ class NAMLIterableDataset(IterableDataset):
         num_workers = worker_info.num_workers if worker_info is not None else 1
         worker_id = worker_info.id if worker_info is not None else 0
 
-        # DDP Sharding
         if dist.is_available() and dist.is_initialized():
             world_size = dist.get_world_size()
             rank = dist.get_rank()
@@ -188,7 +185,6 @@ class NAMLIterableDataset(IterableDataset):
         iterator = self._stream_from_parquet()
         sharded_iterator = islice(iterator, current_shard_id, None, total_shards)
 
-        # Shuffle Buffer logic
         if self.shuffle_buffer_size > 0:
             buffer = []
             for item in sharded_iterator:
@@ -215,25 +211,33 @@ class NAMLDataModule(L.LightningDataModule):
         if self.emb_manager is None:
             self.emb_manager = NewsEmbeddingManager(self.hparams.embedding_path)
 
-        art_p = Path(self.hparams.root_path) / "articles.parquet"
         root = Path(self.hparams.root_path)
 
+        # Lưu ý: Không cần articles_path nữa
         if stage == "fit" or stage is None:
             self.train_ds = NAMLIterableDataset(
-                root / "train/behaviors.parquet", root / "train/history.parquet", art_p,
-                self.emb_manager, self.hparams.history_len, self.hparams.neg_ratio,
-                self.hparams.batch_size, 'train'
+                behaviors_path=root / "train" / "behaviors_processed.parquet",
+                history_path=root / "train" / "history_processed.parquet",
+                embedding_manager=self.emb_manager,
+                history_len=self.hparams.history_len,
+                neg_ratio=self.hparams.neg_ratio,
+                batch_size=self.hparams.batch_size,
+                mode='train'
             )
             self.val_ds = NAMLIterableDataset(
-                root / "validation/behaviors.parquet", root / "validation/history.parquet", art_p,
-                self.emb_manager, self.hparams.history_len, self.hparams.neg_ratio,
-                self.hparams.batch_size, 'val'
+                behaviors_path=root / "validation" / "behaviors_processed.parquet",
+                history_path=root / "validation" / "history_processed.parquet",
+                embedding_manager=self.emb_manager,
+                history_len=self.hparams.history_len,
+                neg_ratio=self.hparams.neg_ratio,
+                batch_size=self.hparams.batch_size,
+                mode='val'
             )
 
     def train_dataloader(self):
-        return DataLoader(self.train_ds, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers,
-                          pin_memory=True)
+        return DataLoader(self.train_ds, batch_size=self.hparams.batch_size,
+                          num_workers=self.hparams.num_workers, pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_ds, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers,
-                          pin_memory=True)
+        return DataLoader(self.val_ds, batch_size=self.hparams.batch_size,
+                          num_workers=self.hparams.num_workers, pin_memory=True)

@@ -265,20 +265,36 @@ class SingleInterestUserEncoder(nn.Module):
         user_vec = self.attention(news_vecs, mask=mask)
         return user_vec
 
-class NewsEncoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.title_emb = nn.Embedding(1, config.embedding_dim)
-        self.body_emb = nn.Embedding(1, config.embedding_dim)
-        self.cat_emb = nn.Embedding(1, config.embedding_dim)
 
+class NewsEncoder(nn.Module):
+    def __init__(self, config, pretrained_embeddings=None):
+        super().__init__()
+
+        # Nếu có pretrained, dùng from_pretrained
+        if pretrained_embeddings is not None:
+            print("⚡ NewsEncoder: Initializing with Pretrained Embeddings")
+            self.title_emb = nn.Embedding.from_pretrained(pretrained_embeddings['title'], freeze=True, padding_idx=0)
+            self.body_emb = nn.Embedding.from_pretrained(pretrained_embeddings['body'], freeze=True, padding_idx=0)
+            self.cat_emb = nn.Embedding.from_pretrained(pretrained_embeddings['cat'], freeze=True, padding_idx=0)
+        else:
+            # Fallback nếu không load được (Dùng số dummy lớn hoặc vocab size thực tế nếu biết)
+            print("⚠️ NewsEncoder: Initializing with Random Embeddings (Vocab=100000 placeholder)")
+            vocab_size = 100000
+            self.title_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+            self.body_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+            self.cat_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+
+        # Các lớp Projection (quan trọng: config.embedding_dim lúc này đã được update ở LightningModule)
         self.title_proj = DeepProjector(config.embedding_dim, config.window_size, config.num_res_blocks, config.dropout)
         self.body_proj = DeepProjector(config.embedding_dim, config.window_size, config.num_res_blocks, config.dropout)
+        # Cat emb thường nhỏ, có thể project hoặc không, ở đây giữ nguyên logic cũ
         self.cat_proj = DeepProjector(config.embedding_dim, config.window_size, num_res_blocks=0,
                                       dropout=config.dropout)
+
         self.final_attention = AdditiveAttention(config.window_size, config.query_vector_dim)
 
     def forward(self, indices):
+        # ... (Code forward giữ nguyên) ...
         t_vec = self.title_proj(self.title_emb(indices))
         b_vec = self.body_proj(self.body_emb(indices))
         c_vec = self.cat_proj(self.cat_emb(indices))
@@ -336,13 +352,15 @@ class NewsEncoder(nn.Module):
 
 
 class VariantNAML(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, pretrained_embeddings=None):
         super().__init__()
-        self.news_encoder = NewsEncoder(config)
+        # Truyền embeddings xuống NewsEncoder
+        self.news_encoder = NewsEncoder(config, pretrained_embeddings)
+
+        # User Encoder (Giữ nguyên class bạn đang dùng)
         self.user_encoder = SingleInterestUserEncoder(config)
 
     def forward(self, batch):
-        # --- Interface chuẩn 2 tham số ---
         hist_vecs = self.news_encoder(batch["hist_indices"])
         user_vec = self.user_encoder(hist_vecs)
         cand_vecs = self.news_encoder(batch["cand_indices"])

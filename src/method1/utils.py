@@ -6,12 +6,12 @@ import numpy as np
 
 class AUC(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
-        # [FIX] Cast về float32 để tránh lỗi sort của torchmetrics trên float16
-        preds = preds.to(dtype=torch.float32)
-        # [FIX] Xử lý NaN nếu có
-        preds = torch.nan_to_num(preds, nan=0.0)
-
         # Lọc bỏ padding (-1)
+        valid_mask = labels != -1
+        if valid_mask.sum() == 0:
+            return
+
+            # Tính AUC cho từng sample trong batch rồi mean
         # Lưu ý: binary_auroc cần input phẳng hoặc batch chuẩn.
         # Ở đây ta loop qua từng user trong batch
         auc_scores = []
@@ -29,17 +29,14 @@ class AUC(torchmetrics.MeanMetric):
             value = torch.stack(auc_scores).mean()
             super().update(value=value, weight=len(auc_scores))
 
-
 class MRR(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
-        # [FIX] Cast về float32 và xử lý NaN
-        preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=0.0)
-
         mrr_scores = []
         for _p, _l in zip(preds, labels):
             _mask = _l != -1
             if _mask.sum() > 0:
+                # Sử dụng hàm có sẵn của torchmetrics cho bài toán retrieval
+                # Target phải là kiểu long (0 hoặc 1)
                 score = torchmetrics.functional.retrieval.retrieval_reciprocal_rank(
                     preds=_p[_mask], target=_l[_mask].long()
                 )
@@ -49,13 +46,8 @@ class MRR(torchmetrics.MeanMetric):
             value = torch.stack(mrr_scores).mean()
             super().update(value=value, weight=len(mrr_scores))
 
-
 class NDCG5(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
-        # [FIX] Cast về float32 và xử lý NaN (QUAN TRỌNG NHẤT VỚI NDCG)
-        preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=0.0)
-
         ndcg_scores = []
         for _p, _l in zip(preds, labels):
             _mask = _l != -1
@@ -72,10 +64,6 @@ class NDCG5(torchmetrics.MeanMetric):
 
 class NDCG10(torchmetrics.MeanMetric):
     def update(self, preds: torch.Tensor, labels: torch.Tensor):
-        # [FIX] Cast về float32 và xử lý NaN
-        preds = preds.to(dtype=torch.float32)
-        preds = torch.nan_to_num(preds, nan=0.0)
-
         ndcg_scores = []
         for _p, _l in zip(preds, labels):
             _mask = _l != -1
@@ -89,6 +77,8 @@ class NDCG10(torchmetrics.MeanMetric):
             value = torch.stack(ndcg_scores).mean()
             super().update(value=value, weight=len(ndcg_scores))
 
+
+# Trong utils.py
 
 def binary_listnet_loss(y_pred, y_true, eps=1e-4, padded_value_indicator=-1):
     y_pred = y_pred.clone()
@@ -105,7 +95,8 @@ def binary_listnet_loss(y_pred, y_true, eps=1e-4, padded_value_indicator=-1):
     normalizer = normalizer.expand(-1, y_true.shape[1])
     y_true = torch.div(y_true, normalizer)
 
-    # Dùng log_softmax thay vì log(softmax)
+    # [FIX QUAN TRỌNG] Dùng log_softmax thay vì log(softmax)
+    # Hàm này cực kỳ ổn định về số học
     preds_log = F.log_softmax(y_pred, dim=1)
 
     return torch.mean(-torch.sum(y_true * preds_log, dim=1))
@@ -121,6 +112,7 @@ class MetricsMeter(torch.nn.Module):
 
         self.bce_loss = torch.nn.BCEWithLogitsLoss(reduction="none")
 
+        # Thêm mrr vào đây
         self.eval_metrics = torchmetrics.MetricCollection({
             "auc": AUC(),
             "mrr": MRR(),
@@ -138,16 +130,20 @@ class MetricsMeter(torch.nn.Module):
         preds = batch["preds"]
         labels = batch["labels"]
 
-        # Tạo mask loại bỏ padding (-1)
+        # Tạo mask loại bỏ padding (-1) hoặc các phần tử thừa
+        # Giả sử padding label là -1 (như đã set trong dataset)
+        # Hoặc dùng labels >= 0
         mask = labels != -1
 
-        # 1. Tính BCE Loss
+        # 1. Tính BCE Loss (Pointwise)
         if "bce_loss" in self.loss_weights:
+            # BCE cần labels float 0.0/1.0
+            # Mask fill padding bằng 0 để không ảnh hưởng sum
             bce = self.bce_loss(preds, labels.float())
             bce = bce.masked_fill(~mask, 0)
-            metrics["bce_loss"] = bce.sum() / (mask.sum() + 1e-4)
+            metrics["bce_loss"] = bce.sum() / (mask.sum() + 1e-6)
 
-        # 2. Tính ListNet Loss
+        # 3. Tính ListNet Loss (Listwise)
         if "listnet_loss" in self.loss_weights:
             metrics["listnet_loss"] = binary_listnet_loss(
                 y_pred=preds,
@@ -158,7 +154,8 @@ class MetricsMeter(torch.nn.Module):
         # Tổng hợp Loss
         metrics["loss"] = sum(w * metrics.get(k, 0.0) for k, w in self.loss_weights.items())
 
-        # Cập nhật Metrics đánh giá
+        # Cập nhật Metrics đánh giá (AUC, NDCG)
+        # Chỉ lấy n_samples đầu nếu cần (cho validation nhanh)
         if n_samples:
             _preds = preds[:n_samples]
             _labels = labels[:n_samples]
@@ -170,4 +167,5 @@ class MetricsMeter(torch.nn.Module):
         return metrics
 
     def compute(self, suffix: str = ""):
+        # Trả về kết quả metrics (AUC, NDCG) đã tích lũy
         return {f"{k}{suffix}": v for k, v in self.eval_metrics.compute().items()}

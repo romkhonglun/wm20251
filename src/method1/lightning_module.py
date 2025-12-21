@@ -13,85 +13,65 @@ from utils import MetricsMeter
 class NAMLLightningModule(pl.LightningModule):
     def __init__(self, config, embedding_dir, lr=1e-3, weight_decay=1e-4):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['config'])  # Không save config object vào hparams
         self.config = config
         self.embedding_dir = embedding_dir
 
-        # --- 1. KHỞI TẠO MODEL ---
-        self.model = VariantNAML(config)
+        # --- 1. LOAD PRETRAINED EMBEDDINGS TRƯỚC ---
+        embeddings_dict = self._load_embeddings_data()
 
-        # --- 2. METRICS & LOSS ---
-        # Sử dụng MetricsMeter để tính toán đồng bộ AUC, NDCG, MRR và Loss
-        # Chỉ dùng BCE Loss cho bài toán Click Prediction
+        # --- 2. CẬP NHẬT CONFIG TỪ DỮ LIỆU THỰC TẾ ---
+        if embeddings_dict is not None:
+            # Lấy dimension thực tế từ file title_emb (ví dụ 768 thay vì 1024 mặc định)
+            real_dim = embeddings_dict['title'].shape[1]
+            if self.config.embedding_dim != real_dim:
+                print(f"ℹ️ Updating embedding_dim from {self.config.embedding_dim} to {real_dim}")
+                self.config.embedding_dim = real_dim
+
+        # --- 3. KHỞI TẠO MODEL VỚI EMBEDDING ĐÃ LOAD ---
+        # Truyền embeddings_dict vào thẳng model
+        self.model = VariantNAML(self.config, pretrained_embeddings=embeddings_dict)
+
+        # --- 4. METRICS & LOSS ---
         self.loss_weights = {"bce_loss": 1.0}
         self.train_meter = MetricsMeter(self.loss_weights)
         self.val_meter = MetricsMeter(self.loss_weights)
 
-        # --- 3. LOAD PRETRAINED EMBEDDINGS ---
-        self._init_embeddings()
-
-    def _init_embeddings(self):
+    def _load_embeddings_data(self):
+        """Hàm helper chỉ để load data lên RAM/Tensor"""
         print(f"Loading embedding weights from {self.embedding_dir}...")
         try:
-            # Load mmap (chế độ chỉ đọc, tiết kiệm RAM)
-            title_w = np.load(f"{self.embedding_dir}/title_emb.npy", mmap_mode='r')
-            body_w = np.load(f"{self.embedding_dir}/body_emb.npy", mmap_mode='r')
-            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy", mmap_mode='r')
+            # Load mmap_mode='r' để không tốn RAM nếu file lớn, nhưng nếu cần GPU thì nên copy
+            # Ở đây ta load full vào RAM rồi chuyển sang Tensor
+            title_w = np.load(f"{self.embedding_dir}/title_emb.npy")
+            body_w = np.load(f"{self.embedding_dir}/body_emb.npy")
+            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy")
 
-            # Convert sang Tensor
-            title_tensor = torch.from_numpy(title_w).float()
-            body_tensor = torch.from_numpy(body_w).float()
-            cat_tensor = torch.from_numpy(cat_w).float()
+            print(f"✅ Loaded embeddings: Title={title_w.shape}, Body={body_w.shape}")
 
-            # Inject vào NewsEncoder
-            self.model.news_encoder.title_emb = nn.Embedding.from_pretrained(title_tensor, freeze=True, padding_idx=0)
-            self.model.news_encoder.body_emb = nn.Embedding.from_pretrained(body_tensor, freeze=True, padding_idx=0)
-            self.model.news_encoder.cat_emb = nn.Embedding.from_pretrained(cat_tensor, freeze=True, padding_idx=0)
-
-            print("✅ Embeddings injected successfully.")
-            # Xóa biến tạm để giải phóng RAM
-            del title_w, body_w, cat_w, title_tensor, body_tensor, cat_tensor
-
+            return {
+                'title': torch.from_numpy(title_w).float(),
+                'body': torch.from_numpy(body_w).float(),
+                'cat': torch.from_numpy(cat_w).float()
+            }
         except Exception as e:
-            print(f"⚠️ Warning: Could not load embeddings ({e}). Using random init.")
+            print(f"⚠️ Warning: Could not load embeddings ({e}). Model will use Random Init.")
+            return None
 
     def forward(self, batch):
-        """
-        Forward pass: Truyền thẳng dict batch vào model.
-        Model VariantNAML sẽ tự unpack các key: hist_indices, hist_scroll, hist_time...
-        """
         return self.model(batch)
 
     def training_step(self, batch, batch_idx):
-        # 1. Forward
-        preds = self(batch)  # Output: (Batch, Num_Candidates)
-
-        # 2. Tính Loss & Metrics
-        # Dataset trả về 'label_click', MetricsMeter cần key 'labels'
-        meter_input = {
-            "preds": preds,
-            "labels": batch["label_click"]
-        }
-
+        preds = self(batch)
+        meter_input = {"preds": preds, "labels": batch["label_click"]}
         losses = self.train_meter.update(meter_input)
-
-        # 3. Log
         self.log("train/loss", losses["loss"], on_step=True, on_epoch=True, prog_bar=True)
-
         return losses["loss"]
 
     def validation_step(self, batch, batch_idx):
         preds = self(batch)
-        meter_input = {
-            "preds": preds,
-            "labels": batch["label_click"]
-        }
-
-        # Update metrics tích lũy cho validation
-        losses = self.val_meter.update(meter_input)
-
-        # Log loss validation
-        self.log("val/loss", losses["loss"], on_step=False, on_epoch=True, prog_bar=True)
+        meter_input = {"preds": preds, "labels": batch["label_click"]}
+        self.val_meter.update(meter_input)
 
     def on_train_epoch_start(self):
         self.train_meter.reset()
@@ -100,53 +80,13 @@ class NAMLLightningModule(pl.LightningModule):
         self.val_meter.reset()
 
     def on_validation_epoch_end(self):
-        # Tính toán và Log AUC, NDCG, MRR cuối epoch
         metrics = self.val_meter.compute()
-
         for k, v in metrics.items():
             self.log(f"val/{k}", v, prog_bar=(k == "auc"))
-
-        print(f"\nEpoch Metrics: AUC={metrics.get('auc', 0):.4f} | NDCG@10={metrics.get('ndcg@10', 0):.4f}")
+        print(f"\nEpoch Metrics: AUC={metrics.get('auc', 0):.4f}")
         self.val_meter.reset()
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay
-        )
-
-        # Sử dụng CosineAnnealingLR
-        # T_max: Quy định số epoch để LR giảm từ max xuống min.
-        #        Ta lấy luôn self.trainer.max_epochs (được set từ train.py)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=1e-4  # LR tối thiểu không bao giờ xuống thấp hơn mức này
-        )
-        # total_steps = getattr(self.hparams, "scheduler_total_steps", None)
-        #
-        # if total_steps is None or total_steps <= 0:
-        #     total_steps = 10000
-        # print(f"total_steps for OneCycleLR: {total_steps}")
-        # max_lr = getattr(self.hparams, "scheduler_max_lr", 3e-3)
-        #
-        # if max_lr is None:
-        #     max_lr = 3e-3
-        #
-        # print(f"total_steps for OneCycleLR: {total_steps}, max_lr: {max_lr}")
-        # scheduler = optim.lr_scheduler.OneCycleLR(
-        #     optimizer,
-        #     max_lr=max_lr,
-        #     total_steps=total_steps,
-        #     pct_start=0.1,
-        #     anneal_strategy="cos"
-        # )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",  # Quan trọng: Cập nhật mỗi epoch
-                "frequency": 1,
-            },
-        }
+        optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs, eta_min=1e-5)
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}

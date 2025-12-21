@@ -251,6 +251,15 @@ class MultiInterestUserEncoder(nn.Module):
 
         return user_interests
 
+class SingleInterestUserEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.attention = AdditiveAttention(config.window_size, config.query_vector_dim)
+
+    def forward(self, news_vecs, mask=None):
+        user_vec = self.attention(news_vecs, mask=mask)
+        return user_vec.unsqueeze(1)
+
 class NewsEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -285,8 +294,8 @@ class VariantNAML(nn.Module):
 
         # ==> Dùng Class mới kết hợp cả 2 cơ chế
         # self.user_encoder = InteractionMultiInterestUserEncoder(config)
-        self.user_encoder = MultiInterestUserEncoder(config)
-
+        # self.user_encoder = MultiInterestUserEncoder(config)
+        self.user_encoder = SingleInterestUserEncoder(config)
     def forward(self, batch):
         # 1. Encode History
         hist_idx = batch['hist_indices']
@@ -298,13 +307,13 @@ class VariantNAML(nn.Module):
         if hist_mask.all(dim=1).any():
             hist_mask[hist_mask.all(dim=1), 0] = False
 
-        user_interests = self.user_encoder(
-            hist_vecs,
-            batch['hist_scroll'],
-            batch['hist_time'],
-            mask=hist_mask
-        )
-
+        # user_interests = self.user_encoder(
+        #     hist_vecs,
+        #     batch['hist_scroll'],
+        #     batch['hist_time'],
+        #     mask=hist_mask
+        # )
+        user_interests = self.user_encoder(hist_vecs, mask=hist_mask)
         # 2. Encode Candidates
         cand_vecs = self.news_encoder(batch['cand_indices'])  # [B, C, D]
 

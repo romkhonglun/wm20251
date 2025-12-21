@@ -139,9 +139,15 @@ class MetricsMeter(torch.nn.Module):
         if "bce_loss" in self.loss_weights:
             # BCE cần labels float 0.0/1.0
             # Mask fill padding bằng 0 để không ảnh hưởng sum
-            bce = self.bce_loss(preds, labels.float())
+            clean_labels = labels.float()
+            clean_labels[~mask] = 0.0
+
+            # Tính loss với labels sạch
+            bce = self.bce_loss(preds, clean_labels)
+
+            # Mask kết quả loss (để chắc chắn padding không đóng góp vào loss)
             bce = bce.masked_fill(~mask, 0)
-            metrics["bce_loss"] = bce.sum() / (mask.sum() + 1e-6)
+            metrics["bce_loss"] = bce.sum() / (mask.sum() + 1e-4)
 
         # 3. Tính ListNet Loss (Listwise)
         if "listnet_loss" in self.loss_weights:

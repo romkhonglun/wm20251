@@ -34,8 +34,8 @@ class ResBlock(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-
-    def forward(self, x): return x + self.block(x)
+    def forward(self, x):
+        return x + self.block(x)
 
 
 class DeepProjector(nn.Module):
@@ -270,19 +270,10 @@ class NewsEncoder(nn.Module):
     def __init__(self, config, pretrained_embeddings=None):
         super().__init__()
 
-        # Nếu có pretrained, dùng from_pretrained
-        if pretrained_embeddings is not None:
-            print("⚡ NewsEncoder: Initializing with Pretrained Embeddings")
-            self.title_emb = nn.Embedding.from_pretrained(pretrained_embeddings['title'], freeze=True, padding_idx=0)
-            self.body_emb = nn.Embedding.from_pretrained(pretrained_embeddings['body'], freeze=True, padding_idx=0)
-            self.cat_emb = nn.Embedding.from_pretrained(pretrained_embeddings['cat'], freeze=True, padding_idx=0)
-        else:
-            # Fallback nếu không load được (Dùng số dummy lớn hoặc vocab size thực tế nếu biết)
-            print("⚠️ NewsEncoder: Initializing with Random Embeddings (Vocab=100000 placeholder)")
-            vocab_size = 100000
-            self.title_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
-            self.body_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
-            self.cat_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+        print("⚡ NewsEncoder: Initializing with Pretrained Embeddings")
+        self.title_emb = nn.Embedding.from_pretrained(pretrained_embeddings['title'], freeze=True, padding_idx=0)
+        self.body_emb = nn.Embedding.from_pretrained(pretrained_embeddings['body'], freeze=True, padding_idx=0)
+        self.cat_emb = nn.Embedding.from_pretrained(pretrained_embeddings['cat'], freeze=True, padding_idx=0)
 
         # Các lớp Projection (quan trọng: config.embedding_dim lúc này đã được update ở LightningModule)
         self.title_proj = DeepProjector(config.embedding_dim, config.window_size, config.num_res_blocks, config.dropout)
@@ -366,4 +357,5 @@ class VariantNAML(nn.Module):
         cand_vecs = self.news_encoder(batch["cand_indices"])
 
         scores = torch.bmm(cand_vecs, user_vec.unsqueeze(2)).squeeze(2)
+        scores = F.logsigmoid(scores)
         return scores

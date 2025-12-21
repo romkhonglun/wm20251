@@ -9,7 +9,6 @@ from pathlib import Path
 from model import VariantNAML
 from utils import MetricsMeter
 
-
 class NAMLLightningModule(pl.LightningModule):
     def __init__(self, config, embedding_dir, lr=1e-3, weight_decay=1e-4):
         super().__init__()

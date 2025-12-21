@@ -38,7 +38,7 @@ def parse_args():
                         help="Thư mục chứa các file embedding weight (.npy)")
 
     # --- Training Hyperparams ---
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=512, help="Batch size")
     parser.add_argument("--epochs", type=int, default=10, help="Số lượng epoch")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")

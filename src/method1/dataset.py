@@ -153,10 +153,10 @@ class NAMLIterableDataset(IterableDataset):
 
         return {
             "hist_indices": torch.LongTensor(h_idx),
-            "hist_scroll": torch.FloatTensor(h_scr),
-            "hist_time": torch.FloatTensor(h_tim),
+            # "hist_scroll": torch.FloatTensor(h_scr),
+            # "hist_time": torch.FloatTensor(h_tim),
             "cand_indices": torch.LongTensor(cand_indices),
-            "label_click": torch.FloatTensor([1.0] + [0.0] * self.neg_ratio)
+            "label_click": torch.Tensor([1.0] + [0.0] * self.neg_ratio)
         }
 
     def _stream_from_parquet(self):

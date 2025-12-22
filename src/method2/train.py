@@ -112,10 +112,10 @@ def main():
 
     # 4. Logger (Wandb)
     wandb_logger = WandbLogger(
-        project="News-Rec",
-        name="Method-2-Time-Features",
+        project="NewsRecSys",
+        name="method2",
         log_model=False,
-        mode = "offline"  # Change to "online" to enable online logging
+        mode = "online"  # Change to "online" to enable online logging
     )
 
     # 5. Callbacks
@@ -150,7 +150,7 @@ def main():
         ],
         gradient_clip_algorithm="norm",
         max_epochs=args.epochs,
-        precision="16-mixed",
+        precision="32",
     )
 
     print("🚀 Starting training...")

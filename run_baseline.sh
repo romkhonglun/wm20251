@@ -1,6 +1,5 @@
 uv run src/baseline/train.py \
-    --root-dir "/home2/congnh/wm/processed_parquet" \
-    --embedding-dir "/home2/congnh/wm/embedding" \
-    --batch-size 32 \
-    --epochs 5 \
-    --lr 0.001
+    --root_data_dir /home2/congnh/wm/processed_parquet_large \
+    --embedding_dir /home2/congnh/wm/embedding_large/ \
+    --batch_size 512 \
+    --epochs 10

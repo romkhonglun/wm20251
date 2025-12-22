@@ -1,224 +1,275 @@
 import torch
-import polars as pl
-import numpy as np
+import pytorch_lightning as pl
+from torch.utils.data import IterableDataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+import polars as pl_lib
 import pyarrow.parquet as pq
-import pytorch_lightning as L
-from torch.utils.data import IterableDataset, DataLoader, get_worker_info
+import numpy as np
 import torch.distributed as dist
-from pathlib import Path
+import random
 import gc
+import os
 
 
-# --- 1. QUẢN LÝ EMBEDDING (Tối giản) ---
-class NewsEmbeddingManager:
-    def __init__(self, processed_dir):
-        # Load xong xóa ngay mảng numpy gốc để tiết kiệm RAM
-        # Chỉ giữ lại dictionary mapping (nhẹ hơn nhiều)
-        ids_path = Path(processed_dir) / "article_ids.npy"
-        temp_ids = np.load(ids_path)
-        self.nid2index = {nid: i for i, nid in enumerate(temp_ids)}
-        del temp_ids
+# ==========================================
+# 1. COMPACT HISTORY (Memory Efficient)
+# ==========================================
+class CompactHistory:
+    """
+    Load history dạng CSR (Compressed Sparse Row) để tiết kiệm RAM tối đa.
+    """
+
+    def __init__(self, history_path):
+        if not os.path.exists(history_path):
+            raise FileNotFoundError(f"History file not found: {history_path}")
+
+        print(f"Loading history from {history_path}...")
+        df = pl_lib.read_parquet(history_path)
+
+        # Sort theo user_id để đảm bảo thứ tự mapping
+        df = df.sort("user_id")
+
+        users = df["user_id"].to_numpy()
+        histories = df["hist_ids"].to_list()
+
+        # Mapping User ID -> Index trong mảng offsets
+        self.user_map = {u: i for i, u in enumerate(users)}
+
+        # Flatten toàn bộ history thành 1 mảng int32 duy nhất
+        self.values = np.concatenate([np.array(h, dtype=np.int32) for h in histories])
+
+        # Tạo mảng offsets
+        lens = np.array([len(h) for h in histories], dtype=np.int32)
+        self.offsets = np.zeros(len(lens) + 1, dtype=np.int32)
+        self.offsets[1:] = np.cumsum(lens)
+
+        print(f" -> Loaded {len(self.user_map)} users. Total clicks: {len(self.values)}")
+
+        del df, histories, users, lens
         gc.collect()
 
-    def map_ids_to_indices(self, id_list):
-        # Map ID sang Index, nếu không thấy trả về 0
-        return [self.nid2index.get(i, 0) for i in id_list]
+    def get_history(self, user_id):
+        idx = self.user_map.get(user_id)
+        if idx is None:
+            return np.array([], dtype=np.int32)
+
+        start = self.offsets[idx]
+        end = self.offsets[idx + 1]
+        return self.values[start:end]
 
 
-# --- 2. DATASET (Tối ưu I/O và RAM) ---
-class NAMLIterableDataset(IterableDataset):
-    def __init__(self, behaviors_path, history_path, embedding_manager,
-                 history_len=30, neg_ratio=4, batch_size=32,
-                 mode='train', shuffle_buffer_size=5000):
-        super().__init__()
+# ==========================================
+# 2. ITERABLE DATASET
+# ==========================================
+class NewsRecIterableDataset(IterableDataset):
+    def __init__(self,
+                 behaviors_path: str,
+                 compact_history: CompactHistory,
+                 npratio: int = 4,
+                 batch_size_parquet: int = 4096,
+                 buffer_size: int = 5000,
+                 mode: str = 'train'):
+
+        if not os.path.exists(behaviors_path):
+            raise FileNotFoundError(f"Behaviors file not found: {behaviors_path}")
+
         self.behaviors_path = behaviors_path
-        self.embedding_manager = embedding_manager
-        self.history_len = history_len
-        self.neg_ratio = neg_ratio
-        self.batch_size = batch_size
+        self.compact_history = compact_history
+        self.npratio = npratio
+        self.batch_size_parquet = batch_size_parquet
+        self.buffer_size = buffer_size
         self.mode = mode
-        self.shuffle_buffer_size = shuffle_buffer_size if mode == 'train' else 0
 
-        # Load History 1 lần duy nhất
-        self.user_history = self._load_history(history_path)
+    def _get_worker_info(self):
+        rank = 0
+        world_size = 1
+        worker_id = 0
+        num_workers = 1
+        if dist.is_available() and dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+        return rank, world_size, worker_id, num_workers
 
-    def _load_history(self, path):
-        # Chỉ đọc 2 cột cần thiết, dùng Polars cho nhanh
-        print(f"Loading history from {path}...")
-        try:
-            col_name = "hist_ids"  # Đảm bảo đúng tên cột trong file parquet
-            df = pl.read_parquet(path, columns=["user_id", col_name])
-
-            # --- [SỬA ĐOẠN NÀY] ---
-            # CŨ (Gây lỗi): df["col"] trả về Series, zip có thể vẫn giữ tính chất của Polars
-            # history_map = dict(zip(df["user_id"], df[col_name]))
-
-            # MỚI (Fix): Ép kiểu sang Python List bằng .to_list() trước khi zip
-            history_map = dict(zip(df["user_id"].to_list(), df[col_name].to_list()))
-            # ----------------------
-
-            # Xóa dataframe ngay lập tức
-            del df
-            gc.collect()
-            print(f"✅ Loaded history for {len(history_map)} users.")
-            return history_map
-        except Exception as e:
-            print(f"⚠️ Error loading history: {e}")
-            return {}
-
-    def _process_batch(self, user_ids, clicked_batch, inview_batch):
-        """Xử lý theo batch để tận dụng tốc độ của Numpy/List comprehension"""
-        outputs = []
-
-        # Zip 3 list lại để loop 1 lần duy nhất
-        for uid, clicked, inview in zip(user_ids, clicked_batch, inview_batch):
-            # 1. Xử lý History
-            hist = self.user_history.get(uid, [])
-            if len(hist) < self.history_len:
-                hist = hist + [0] * (self.history_len - len(hist))
-            else:
-                hist = hist[-self.history_len:]
-
-            # 2. Xử lý Candidate (Pos + Neg)
-            if self.mode == 'train':
-                # Lấy 1 Positive
-                pos = np.random.choice(clicked) if clicked else (inview[0] if inview else 0)
-
-                # Lấy K Negatives
-                negs = list(set(inview) - set(clicked))
-                if not negs:
-                    negs = [pos] * self.neg_ratio
-                elif len(negs) >= self.neg_ratio:
-                    negs = np.random.choice(negs, self.neg_ratio, replace=False).tolist()
-                else:
-                    negs = (negs * (self.neg_ratio // len(negs) + 1))[:self.neg_ratio]
-
-                cands = [pos] + negs
-                labels = [1.0] + [0.0] * self.neg_ratio
-            else:
-                # Validation: Đơn giản hóa để chạy mượt
-                pos = clicked[0] if clicked else (inview[0] if inview else 0)
-                # Fill dummy negatives cho đủ shape model yêu cầu
-                cands = [pos] + [pos] * self.neg_ratio
-                labels = [1.0] + [0.0] * self.neg_ratio
-
-            # 3. Map sang Index và đóng gói
-            outputs.append({
-                "hist_indices": torch.tensor(self.embedding_manager.map_ids_to_indices(hist), dtype=torch.long),
-                "cand_indices": torch.tensor(self.embedding_manager.map_ids_to_indices(cands), dtype=torch.long),
-                "labels": torch.tensor(labels, dtype=torch.float)
-            })
-
-        return outputs
-
-    def _stream_data(self, worker_id, num_workers, rank, world_size):
-        """Đọc file Parquet theo RowGroup (Không bao giờ đọc trùng lặp)"""
-        pq_file = pq.ParquetFile(self.behaviors_path)
-
-        # Chia việc: Worker này phụ trách những RowGroup nào?
+    def __iter__(self):
+        rank, world_size, worker_id, num_workers = self._get_worker_info()
         total_workers = world_size * num_workers
         global_worker_id = rank * num_workers + worker_id
 
-        # Chỉ đọc các cột thật sự cần
-        cols = ["user_id", "clk_ids", "inv_ids"]
+        parquet_file = pq.ParquetFile(self.behaviors_path)
+        buffer = []
 
-        for i in range(pq_file.num_row_groups):
-            # Nếu RowGroup này không thuộc về tôi -> Bỏ qua ngay
-            if i % total_workers != global_worker_id:
+        # Đọc từng batch từ file parquet (tránh load hết vào RAM)
+        for batch_idx, batch in enumerate(parquet_file.iter_batches(batch_size=self.batch_size_parquet)):
+            # Sharding: Skip các batch không thuộc worker này
+            if batch_idx % total_workers != global_worker_id:
                 continue
 
-            # Đọc và convert sang list python (nhanh hơn xử lý từng dòng object)
-            table = pq_file.read_row_group(i, columns=cols)
+            batch_dict = batch.to_pydict()
+            users = batch_dict['user_id']
+            inv_lists = batch_dict['inv_ids']
+            clk_lists = batch_dict['clk_ids']
 
-            # Xử lý batch
-            items = self._process_batch(
-                table["user_id"].to_numpy(),
-                table["clk_ids"].to_pylist(),
-                table["inv_ids"].to_pylist()
-            )
+            for i in range(len(users)):
+                user_id = users[i]
+                hist_ids = self.compact_history.get_history(user_id)
 
-            yield from items
+                inv_set = set(inv_lists[i])
+                clk_set = set(clk_lists[i])
 
-            # Dọn rác sau mỗi RowGroup
-            del table, items
-            # gc.collect() # Có thể uncomment nếu RAM quá thấp (nhưng sẽ làm chậm 1 chút)
+                # --- TRAIN MODE ---
+                if self.mode == 'train':
+                    if not clk_set: continue
+                    neg_candidates = list(inv_set - clk_set)
 
-    def __iter__(self):
-        # Lấy thông tin worker hiện tại
-        info = get_worker_info()
-        wid = info.id if info else 0
-        num_w = info.num_workers if info else 1
+                    for pos_id in clk_set:
+                        # Negative Sampling
+                        if not neg_candidates:
+                            selected_negs = [pos_id] * self.npratio
+                        elif len(neg_candidates) >= self.npratio:
+                            selected_negs = random.sample(neg_candidates, self.npratio)
+                        else:
+                            selected_negs = random.choices(neg_candidates, k=self.npratio)
 
-        # Lấy thông tin GPU/Distributed
-        if dist.is_available() and dist.is_initialized():
-            ws = dist.get_world_size()
-            rank = dist.get_rank()
-        else:
-            ws, rank = 1, 0
+                        candidate_ids = [pos_id] + selected_negs
 
-        stream = self._stream_data(wid, num_w, rank, ws)
+                        buffer.append({
+                            "hist_ids": hist_ids,
+                            "candidate_ids": np.array(candidate_ids, dtype=np.int32),
+                            "label": [1.0]+[0.0]*self.npratio
+                        })
 
-        # Shuffle Buffer đơn giản
-        if self.shuffle_buffer_size > 0:
-            buffer = []
-            try:
-                for _ in range(self.shuffle_buffer_size):
-                    buffer.append(next(stream))
-            except StopIteration:
-                pass
+                # --- VAL MODE ---
+                else:
+                    # Giữ nguyên toàn bộ inview
+                    candidate_ids = list(inv_lists[i])
+                    labels = [1 if doc_id in clk_set else 0 for doc_id in candidate_ids]
 
-            while buffer:
-                try:
-                    item = next(stream)
-                    idx = np.random.randint(len(buffer))
-                    yield buffer[idx]
-                    buffer[idx] = item
-                except StopIteration:
-                    np.random.shuffle(buffer)
-                    yield from buffer
-                    buffer = []
-        else:
-            yield from stream
+                    yield {
+                        "hist_ids": hist_ids,
+                        "candidate_ids": np.array(candidate_ids, dtype=np.int32),
+                        "labels": np.array(labels, dtype=np.float32)
+                    }
+
+            # Shuffle buffer (chỉ cho Train)
+            if self.mode == 'train':
+                if len(buffer) >= self.buffer_size:
+                    random.shuffle(buffer)
+                    for _ in range(len(buffer)):
+                        yield buffer.pop()
+
+        # Flush buffer cuối cùng
+        if self.mode == 'train' and buffer:
+            random.shuffle(buffer)
+            for item in buffer:
+                yield item
 
 
-# --- 3. LIGHTNING MODULE (Sạch sẽ) ---
-class NAMLDataModule(L.LightningDataModule):
-    def __init__(self, root_path, embedding_path, batch_size=32, history_len=30, num_workers=2,neg_ratio=4):
+# ==========================================
+# 3. LIGHTNING DATA MODULE (Updated Logic)
+# ==========================================
+class NewsRecDataModule(pl.LightningDataModule):
+    def __init__(self,
+                 root_data_dir: str,  # Chỉ cần path tới folder cha
+                 batch_size: int = 32,
+                 npratio: int = 4,
+                 num_workers: int = 2,
+                 max_hist_len: int = 50):
         super().__init__()
         self.save_hyperparameters()
-        self.emb_manager = None
+        self.root = root_data_dir
+        self.batch_size = batch_size
+        self.npratio = npratio
+        self.num_workers = num_workers
+        self.max_hist_len = max_hist_len
+
+        # Placeholder cho history objects
+        self.train_history_struct = None
+        self.val_history_struct = None
 
     def setup(self, stage=None):
-        if not self.emb_manager:
-            self.emb_manager = NewsEmbeddingManager(self.hparams.embedding_path)
+        """
+        Tự động map path dựa trên cấu trúc thư mục:
+        root/
+          train/
+            behaviors_processed.parquet
+            history_processed.parquet
+          validation/
+            behaviors_processed.parquet
+            history_processed.parquet
+        """
+        # Xây dựng đường dẫn
+        train_hist_path = os.path.join(self.root, "train", "history_processed.parquet")
+        val_hist_path = os.path.join(self.root, "validation", "history_processed.parquet")
 
-        # Common config
-        ds_args = {
-            'embedding_manager': self.emb_manager,
-            'history_len': self.hparams.history_len,
-            'batch_size': self.hparams.batch_size,
-        }
+        # Load History vào Shared Memory (Main Process)
+        # Chúng ta load riêng Train History và Val History vì folder tách biệt
+        if self.train_history_struct is None:
+            print("--- Setup Train Data ---")
+            self.train_history_struct = CompactHistory(train_hist_path)
 
-        if stage == 'fit' or stage is None:
-            self.train_ds = NAMLIterableDataset(
-                behaviors_path=Path(self.hparams.root_path) / "train" / "behaviors_processed.parquet",
-                history_path=Path(self.hparams.root_path) / "train" / "history_processed.parquet",
-                mode='train',
-                neg_ratio =self.hparams.neg_ratio,
-                **ds_args
-            )
-            self.val_ds = NAMLIterableDataset(
-                behaviors_path=Path(self.hparams.root_path) / "validation" / "behaviors_processed.parquet",
-                history_path=Path(self.hparams.root_path) / "validation" / "history_processed.parquet",
-                mode='val',
-                neg_ratio =self.hparams.neg_ratio,
-                **ds_args
-            )
+        if self.val_history_struct is None:
+            print("--- Setup Validation Data ---")
+            self.val_history_struct = CompactHistory(val_hist_path)
 
     def train_dataloader(self):
-        return DataLoader(self.train_ds, batch_size=self.hparams.batch_size,
-                          num_workers=self.hparams.num_workers, pin_memory=True)
+        train_behaviors = os.path.join(self.root, "train", "behaviors_processed.parquet")
+
+        dataset = NewsRecIterableDataset(
+            behaviors_path=train_behaviors,
+            compact_history=self.train_history_struct,  # Truyền train history
+            npratio=self.npratio,
+            mode='train',
+            buffer_size=5000
+        )
+        return DataLoader(
+            dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+            collate_fn=self.collate_fn_train, pin_memory=True, persistent_workers=True
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.val_ds, batch_size=self.hparams.batch_size,
-                          num_workers=self.hparams.num_workers, pin_memory=True)
+        val_behaviors = os.path.join(self.root, "validation", "behaviors_processed.parquet")
+
+        dataset = NewsRecIterableDataset(
+            behaviors_path=val_behaviors,
+            compact_history=self.val_history_struct,  # Truyền val history
+            mode='val'
+        )
+        return DataLoader(
+            dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+            collate_fn=self.collate_fn_val, pin_memory=True
+        )
+
+    # --- Collate Functions ---
+    def collate_fn_train(self, batch):
+        hist_ids = [torch.from_numpy(item['hist_ids'][:self.max_hist_len]).long() for item in batch]
+        candidate_ids = [torch.from_numpy(item['candidate_ids']).long() for item in batch]
+        labels = torch.tensor([item['label'] for item in batch], dtype=torch.long)
+
+        hist_padded = pad_sequence(hist_ids, batch_first=True, padding_value=0)
+        candidate_tensor = torch.stack(candidate_ids)
+
+        return {
+            "hist_ids": hist_padded,
+            "candidate_ids": candidate_tensor,
+            "labels": labels
+        }
+
+    def collate_fn_val(self, batch):
+        hist_ids = [torch.from_numpy(item['hist_ids'][:self.max_hist_len]).long() for item in batch]
+        cands = [torch.from_numpy(item['candidate_ids']).long() for item in batch]
+        lbls = [torch.from_numpy(item['labels']).float() for item in batch]
+
+        hist_padded = pad_sequence(hist_ids, batch_first=True, padding_value=0)
+        cands_padded = pad_sequence(cands, batch_first=True, padding_value=0)
+        # Padding label bằng -1 để mask sau này
+        lbls_padded = pad_sequence(lbls, batch_first=True, padding_value=-1)
+
+        return {
+            "hist_ids": hist_padded,
+            "candidate_ids": cands_padded,
+            "labels": lbls_padded
+        }

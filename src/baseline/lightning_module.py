@@ -1,157 +1,129 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import pytorch_lightning as L
+import pytorch_lightning as pl
 import numpy as np
-from pathlib import Path
-
-# Import class model và metrics của bạn
-from model import NAMLConfig, OriginalNAML
-from utils import MetricsMeter
+from model import VariantNAML
+from utils import MetricsMeter  # Import class MetricsMeter đã tối ưu ở câu trước
 
 
-class NAMLModule(L.LightningModule):
-    def __init__(
-            self,
-            config: NAMLConfig,
-            embedding_dir: str,
-            lr: float = 1e-3,
-            weight_decay: float = 1e-5,
-            total_steps: int = 10000,  # Quan trọng cho OneCycleLR
-            scheduler_type: str = "onecycle"
-    ):
+class NAMLLightningModule(pl.LightningModule):
+    def __init__(self,
+                 config,
+                 embedding_dir: str,
+                 lr=1e-4,
+                 weight_decay=1e-5):
         super().__init__()
-        # 1. Lưu hyperparameters tự động (truy cập qua self.hparams.lr, v.v.)
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['pretrained_embeddings', 'config'])
 
+        # 1. Model & Config
         self.config = config
-        self.embedding_dir = embedding_dir
-        embeddings_dict = self._init_embeddings()
-        # 2. Khởi tạo Model
-        self.model = OriginalNAML(config,pretrained_embeddings=embeddings_dict)
+        self.model = VariantNAML(config)
+        self._init_embeddings(embedding_dir)
 
-        # 3. Khởi tạo Metrics Meter
-        # Kết hợp BCE (cho classification) và ListNet (cho ranking)
+        # Hyperparameters
+        self.lr = lr
+        self.weight_decay = weight_decay
+
+        # 2. Metrics & Loss
+        # Weights cho loss function (tùy chỉnh theo bài toán)
         self.loss_weights = {"bce_loss": 1.0}
+
+        # [QUAN TRỌNG] Khởi tạo 2 meter riêng biệt.
+        # MetricsMeter là nn.Module nên Lightning sẽ tự động move sang GPU.
         self.train_meter = MetricsMeter(self.loss_weights)
         self.val_meter = MetricsMeter(self.loss_weights)
 
-        # 4. Load Pre-trained Embeddings
+    def _init_embeddings(self, embedding_dir):
+        # ... (Giữ nguyên code load embedding của bạn) ...
+        print(f"Loading embedding weights from {embedding_dir}...")
+        try:
+            title_w = np.load(f"{embedding_dir}/title_emb.npy", mmap_mode='r')
+            body_w = np.load(f"{embedding_dir}/body_emb.npy", mmap_mode='r')
+            cat_w = np.load(f"{embedding_dir}/cat_emb.npy", mmap_mode='r')
 
+            title_tensor = torch.from_numpy(title_w).float()
+            body_tensor = torch.from_numpy(body_w).float()
+            cat_tensor = torch.from_numpy(cat_w).float()
+
+            self.model.news_encoder.title_emb = nn.Embedding.from_pretrained(title_tensor, freeze=True)
+            self.model.news_encoder.body_emb = nn.Embedding.from_pretrained(body_tensor, freeze=True)
+            self.model.news_encoder.cat_emb = nn.Embedding.from_pretrained(cat_tensor, freeze=True)
+
+            print("✅ Embeddings injected successfully.")
+            del title_w, body_w, cat_w, title_tensor, body_tensor, cat_tensor
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load embeddings ({e}). Using random init.")
 
     def forward(self, batch):
-        # [QUAN TRỌNG] Model OriginalNAML yêu cầu 2 tham số đầu vào riêng biệt
-        # Dataset trả về dict, ta cần unpack nó ra
-        hist_indices = batch["hist_indices"]
-        cand_indices = batch["cand_indices"]
-
-        # Gọi model
-        scores = self.model(hist_indices, cand_indices)
-        return scores
-
-    def _init_embeddings(self):
-        """Hàm helper chỉ để load data lên RAM/Tensor"""
-        print(f"Loading embedding weights from {self.embedding_dir}...")
-        try:
-            # Load mmap_mode='r' để không tốn RAM nếu file lớn, nhưng nếu cần GPU thì nên copy
-            # Ở đây ta load full vào RAM rồi chuyển sang Tensor
-            title_w = np.load(f"{self.embedding_dir}/title_emb.npy")
-            body_w = np.load(f"{self.embedding_dir}/body_emb.npy")
-            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy")
-
-            print(f"✅ Loaded embeddings: Title={title_w.shape}, Body={body_w.shape}")
-
-            return {
-                'title': torch.from_numpy(title_w).float(),
-                'body': torch.from_numpy(body_w).float(),
-                'cat': torch.from_numpy(cat_w).float()
-            }
-        except Exception as e:
-            print(f"⚠️ Warning: Could not load embeddings ({e}). Model will use Random Init.")
-            return None
+        return self.model(batch)
 
     def training_step(self, batch, batch_idx):
-        # 1. Forward Pass
-        preds = self(batch)  # shape: (Batch, Cand_Len)
+        output = self(batch)
 
-        # 2. Tính Loss & Metrics
-        # MetricsMeter nhận dict input
+        # Lấy preds từ output dict
+        preds = output["preds"] if isinstance(output, dict) else output
+
+        # Chuẩn bị input cho meter
         meter_input = {"preds": preds, "labels": batch["labels"]}
+
+        # Update train_meter -> Trả về loss dict (BCE, ListNet, Total Loss)
+        # Lưu ý: Ở step này metrics (AUC/NDCG) chưa được compute để tiết kiệm thời gian
         losses = self.train_meter.update(meter_input)
 
-        # 3. Log
-        # Log loss tổng
-        self.log("train/loss", losses["loss"], on_step=True, on_epoch=True, prog_bar=True)
-        # Log loss thành phần (để debug xem cái nào đang chiếm ưu thế)
-        if "bce_loss" in losses:
-            self.log("train/bce", losses["bce_loss"], on_step=False, on_epoch=True)
-        if "listnet_loss" in losses:
-            self.log("train/listnet", losses["listnet_loss"], on_step=False, on_epoch=True)
+        # Log losses
+        self.log_dict(
+            {f"train/{k}": v for k, v in losses.items()},
+            on_step=True, on_epoch=True, prog_bar=True, sync_dist=True
+        )
 
         return losses["loss"]
 
-    def validation_step(self, batch, batch_idx):
-        preds = self(batch)
-        meter_input = {"preds": preds, "labels": batch["labels"]}
-
-        # Update metrics tích lũy
-        self.val_meter.update(meter_input)
-
-        # Tính loss cho batch hiện tại (chỉ để log, không backprop)
-        # Lưu ý: val_meter.update trả về loss dict của batch đó
-        # (cần sửa MetricsMeter một chút để nó return loss dict ở update - code trước đã có return)
-        # Nếu MetricsMeter của bạn không return loss ở update, bạn cần gọi compute loss riêng.
-        # Nhưng theo code MetricsMeter bạn đưa thì nó có return metrics dict (chứa loss).
-
-        # Chúng ta không log loss ở step validation để tránh log quá nhiều,
-        # chỉ log aggregated metric ở cuối epoch.
-
-    def on_validation_epoch_end(self):
-        # 1. Compute Metrics tích lũy cả epoch
-        metrics = self.val_meter.compute()
-
-        # 2. Log Metrics (AUC, MRR, NDCG...)
-        # prog_bar=True để hiện AUC lên thanh tiến trình
-        for k, v in metrics.items():
-            self.log(f"val/{k}", v, prog_bar=(k == "auc"))
-
-        print(f"\nExample Val Metrics: AUC={metrics.get('auc', 0):.4f} | NDCG@10={metrics.get('ndcg@10', 0):.4f}")
-
-        # 3. Reset cho epoch sau
-        self.val_meter.reset()
-
-    def on_train_epoch_start(self):
+    def on_train_epoch_end(self):
+        # Reset train meter sau mỗi epoch
         self.train_meter.reset()
 
+    def validation_step(self, batch, batch_idx):
+        # Forward pass
+        output = self(batch)
+        preds = output["preds"] if isinstance(output, dict) else output
+
+        meter_input = {"preds": preds, "labels": batch["labels"]}
+
+        # Update val_meter (Tích lũy preds/labels để tính metrics sau)
+        # Hàm update trả về loss của batch hiện tại
+        losses = self.val_meter.update(meter_input)
+
+        # Chỉ log val/loss (để theo dõi loss loss curve)
+        self.log("val/loss", losses["loss"], on_step=False, on_epoch=True, sync_dist=True)
+
+    def on_validation_epoch_end(self):
+        # [QUAN TRỌNG] Compute metrics trên toàn bộ tập validation
+        # Lúc này MetricsMeter mới thực sự gọi các hàm vectorization của TorchMetrics
+        metrics = self.val_meter.compute()
+
+        # Log metrics với prefix 'val/' (ví dụ: val/ndcg@10, val/auc)
+        # sync_dist=True là bắt buộc nếu chạy nhiều GPU (DDP) để lấy trung bình
+        log_metrics = {f"val/{k}": v for k, v in metrics.items()}
+
+        self.log_dict(log_metrics, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        # Reset sau khi đã log xong
+        self.val_meter.reset()
+
     def configure_optimizers(self):
-        optimizer = optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay
         )
 
-        if self.hparams.scheduler_type == "onecycle":
-            # Với IterableDataset, Trainer đôi khi khó ước lượng total steps chính xác
-            # Nên truyền thủ công total_steps vào __init__ là an toàn nhất.
-            scheduler = optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=self.hparams.lr,
-                total_steps=self.hparams.total_steps,
-                pct_start=0.2,  # 20% warm-up
-                anneal_strategy="cos"
-            )
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "step"  # Update mỗi batch
-                }
-            }
-        if self.hparams.scheduler_type == "cosine":
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=5
-            )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs, eta_min=1e-4)
 
-
-        return optimizer
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1
+            },
+        }

@@ -1,58 +1,36 @@
-import os
 import argparse
+import os
 import torch
-import pytorch_lightning as L
-from pytorch_lightning.callbacks import ModelCheckpoint, RichProgressBar, RichModelSummary
+import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
-from dotenv import load_dotenv
-from pathlib import Path
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor, TQDMProgressBar, ModelSummary
 
-# --- IMPORT MODULES ĐÃ TẠO ---
-# Giả sử bạn lưu các class vào các file tương ứng:
-# model.py -> chứa NAMLConfig, OriginalNAML
-# dataset.py -> chứa NAMLDataModule
-# lightning_module.py -> chứa NAMLModule (class wrapper đã sửa ở bước trước)
-
-from model import NAMLConfig
-from dataset import NAMLDataModule
-from lightning_module import NAMLModule
-
-# Load biến môi trường
-load_dotenv()
-
-# Tối ưu Threading cho CPU
-torch.set_num_threads(4)
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
-
-# ==========================================
-# CẤU HÌNH MẶC ĐỊNH
-# ==========================================
-PROCESSED_DIR = "/processed_parquet"
-EMBEDDING_DIR = "/embedding"
-
-
+# Import các module đã viết trước đó
+from dataset import NewsRecDataModule
+from model import VariantNAMLConfig
+from lightning_module import NAMLLightningModule
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train NAML model")
+    parser = argparse.ArgumentParser(description="Train VariantNAML Model with PyTorch Lightning")
 
-    # Paths
-    parser.add_argument("--root-dir", type=str, default=PROCESSED_DIR, help="Root path containing train/val folders")
-    parser.add_argument("--embedding-dir", type=str, default=EMBEDDING_DIR,
-                        help="Directory containing .npy embedding files")
+    # --- Data Paths ---
+    parser.add_argument('--root_data_dir', type=str, default='/home2/congnh/wm/processed_parquet', help='Thư mục chứa data parquet')
+    parser.add_argument('--embedding_dir', type=str, default='/home2/congnh/wm/embedding', help='Thư mục chứa embeddings')
+    # --- Hyperparameters ---
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size cho training')
+    parser.add_argument('--epochs', type=int, default=10, help='Số epoch tối đa')
+    parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
+    parser.add_argument('--npratio', type=int, default=4, help='Số lượng negative samples per positive')
 
-    # Hyperparameters
-    parser.add_argument("--batch-size", type=int, default=512, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--weight-decay", type=float, default=1e-5, help="Weight decay")
+    # --- System ---
+    parser.add_argument('--num_workers', type=int, default=4, help='Số CPU workers load data')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--precision', type=str, default='16-mixed',
+                        help='Mixed precision (16-mixed) giúp train nhanh hơn trên GPU')
 
-    # Scheduler
-    parser.add_argument("--lr-scheduler", type=str, choices=["onecycle", "cosine"], default="onecycle")
-    parser.add_argument("--total-steps", type=int, default=10000, help="Explicit total steps for OneCycleLR")
-
-    # Hardware
-    parser.add_argument("--num-workers", type=int, default=2, help="Number of DataLoader workers")
+    # --- WandB ---
+    parser.add_argument('--project_name', type=str, default='NewsRecSys', help='WandB Project Name')
+    parser.add_argument('--run_name', type=str, default='baseline', help='Tên run cụ thể')
 
     return parser.parse_args()
 
@@ -60,97 +38,79 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Set seed
-    L.seed_everything(42)
+    # 1. Setup Seed
+    pl.seed_everything(args.seed)
 
-    print("=" * 40)
-    print("   NAML TRAINING PIPELINE   ")
-    print("=" * 40)
-
-    # 1. Init Config
-    # Không cần TIME_FEATURE_NAMLConfig nữa vì ta đang dùng OriginalNAML chuẩn
-    config = NAMLConfig()
-
-    # Bạn có thể override config bằng args nếu muốn (ví dụ dropout)
-    # config.dropout = 0.3 
-
-    print(f"Model Config: EmbedDim={config.embedding_dim}, Filters={config.num_filters}")
-    print(f"Data Dir: {args.root_dir}")
-    print(f"Emb Dir:  {args.embedding_dir}")
-
-    # 2. Init DataModule (Phiên bản tối ưu)
-    dm = NAMLDataModule(
-        root_path=args.root_dir,
-        embedding_path=args.embedding_dir,  # DataModule dùng cái này để map ID
+    # 3. Init DataModule
+    dm = NewsRecDataModule(
+        root_data_dir=args.root_data_dir,
         batch_size=args.batch_size,
-        history_len=30,  # Có thể đưa ra arg
-        neg_ratio=4,
+        npratio=args.npratio,
         num_workers=args.num_workers
     )
 
-    # 3. Tính toán Total Steps cho Scheduler
-    # Vì dùng IterableDataset, ta cần ước lượng số bước train
-    if args.total_steps is None:
-        # Giả sử số lượng mẫu train (bạn có thể check file info hoặc hardcode số liệu thật)
-        # Ví dụ: EB-NeRD demo ~200k samples
-        ESTIMATED_SAMPLES = 200000
-        steps_per_epoch = ESTIMATED_SAMPLES // args.batch_size
-        calculated_total_steps = steps_per_epoch * args.epochs
-        print(f"ℹ️ Auto-calculated total_steps: {calculated_total_steps} (Est. Samples: {ESTIMATED_SAMPLES})")
-    else:
-        calculated_total_steps = args.total_steps
-        print(f"ℹ️ Using provided total_steps: {calculated_total_steps}")
+    # 4. Init Config & Model
+    # Load config từ args
+    config = VariantNAMLConfig()
 
-    # 4. Init Lightning Module
-    model = NAMLModule(
+    model = NAMLLightningModule(
         config=config,
-        embedding_dir=args.embedding_dir,  # Model dùng cái này để load weight
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        total_steps=calculated_total_steps,
-        scheduler_type=args.lr_scheduler
+        embedding_dir=args.embedding_dir,
+        lr=args.lr
     )
 
-    # 5. Logger (Wandb)
+    # 5. WandB Logger (Offline Mode)
     wandb_logger = WandbLogger(
-        project="NAML-RecSys",
-        name=f"naml-bs{args.batch_size}-lr{args.lr}",
-        log_model=False,
-        mode="offline"  # Đổi thành "online" khi chạy thật
+        project=args.project_name,
+        name=args.run_name,
+        offline=False,  # QUAN TRỌNG: Chế độ offline
+        log_model=False
     )
+
+    # Log hyperparameters để tiện so sánh sau này
+    wandb_logger.log_hyperparams(args)
 
     # 6. Callbacks
+    # Lưu model tốt nhất dựa trên NDCG@10 (metric quan trọng nhất của RecSys)
     checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints",
-        filename="naml-{epoch:02d}-{val/auc:.4f}",
-        save_top_k=3,
-        monitor="val/auc",
-        mode="max",
+        filename='Baseline-{epoch:02d}-{val/ndcg@10:.4f}',
+        monitor='val/mrr',
+        mode='max',
+        save_top_k=1,
         verbose=True
     )
 
+    # # Dừng sớm nếu NDCG@10 không tăng sau 3 epochs
+    # early_stop_callback = EarlyStopping(
+    #     monitor='val_ndcg@10',
+    #     patience=3,
+    #     mode='max',
+    #     verbose=True
+    # )
+
+    # Theo dõi LR trong quá trình train
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+
     # 7. Trainer
-    trainer = L.Trainer(
-        accelerator="auto",  # Tự chọn GPU/MPS/CPU
-        devices="auto",
-        strategy="auto",
+    trainer = pl.Trainer(
         logger=wandb_logger,
-        callbacks=[
-            checkpoint_callback,
-            RichModelSummary(max_depth=2),
-            RichProgressBar()
-        ],
+        callbacks=[checkpoint_callback, lr_monitor,TQDMProgressBar(),ModelSummary()],
         max_epochs=args.epochs,
-        precision="16-mixed",  # Mixed Precision cho GPU (nhanh hơn, tốn ít VRAM)
+        accelerator="auto",
+        devices="auto",
+        precision=args.precision,  # Tăng tốc GPU
         log_every_n_steps=50,
-        gradient_clip_val=0.5  # Clip gradient để ổn định training
+        val_check_interval=1.0,  # Check valid mỗi cuối epoch
+        gradient_clip_val=1.0,
+        # strategy='ddp' if args.devices > 1 else 'auto' # Tự động dùng DDP nếu nhiều GPU
     )
 
     # 8. Start Training
-    print("🚀 Starting training...")
+    print("🚀 Starting Training...")
     trainer.fit(model, datamodule=dm)
 
-    print(f"✅ Training finished. Best model path: {checkpoint_callback.best_model_path}")
+    print(f"✅ Training Done! Best model path: {checkpoint_callback.best_model_path}")
+    print("ℹ️  To sync wandb logs later, run: wandb sync <path_to_wandb_dir>")
 
 
 if __name__ == "__main__":

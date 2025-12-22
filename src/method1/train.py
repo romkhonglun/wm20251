@@ -2,7 +2,7 @@ import os
 import argparse
 import torch
 import pytorch_lightning as L
-from pytorch_lightning.callbacks import ModelCheckpoint, RichProgressBar, RichModelSummary
+from pytorch_lightning.callbacks import ModelCheckpoint, TQDMProgressBar, RichModelSummary
 from pytorch_lightning.loggers import WandbLogger
 from dotenv import load_dotenv
 from pathlib import Path
@@ -125,7 +125,7 @@ def main():
         callbacks=[
             checkpoint_callback,
             RichModelSummary(max_depth=2),
-            RichProgressBar(refresh_rate=1)
+            TQDMProgressBar(refresh_rate=1)
         ],
         max_epochs=args.epochs,
         precision="16-mixed",  # Mixed precision giúp train nhanh hơn và ít VRAM hơn

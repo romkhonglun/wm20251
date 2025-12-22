@@ -102,7 +102,7 @@ def main():
         config=config,
         embedding_path=args.embedding_path,
         lr=1e-3,
-        weight_decay=1e-5,
+        weight_decay=1e-4,
         scheduler=args.lr_scheduler,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_max_lr=args.scheduler_max_lr,

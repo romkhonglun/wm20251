@@ -29,8 +29,8 @@ def parse_args():
                         help='Mixed precision (16-mixed) giúp train nhanh hơn trên GPU')
 
     # --- WandB ---
-    parser.add_argument('--project_name', type=str, default='NewsRecSys_NAML', help='WandB Project Name')
-    parser.add_argument('--run_name', type=str, default='experiment_1', help='Tên run cụ thể')
+    parser.add_argument('--project_name', type=str, default='NewsRecSys', help='WandB Project Name')
+    parser.add_argument('--run_name', type=str, default='baseline', help='Tên run cụ thể')
 
     return parser.parse_args()
 
@@ -63,7 +63,7 @@ def main():
     wandb_logger = WandbLogger(
         project=args.project_name,
         name=args.run_name,
-        offline=True,  # QUAN TRỌNG: Chế độ offline
+        offline=False,  # QUAN TRỌNG: Chế độ offline
         log_model=False
     )
 
@@ -73,7 +73,7 @@ def main():
     # 6. Callbacks
     # Lưu model tốt nhất dựa trên NDCG@10 (metric quan trọng nhất của RecSys)
     checkpoint_callback = ModelCheckpoint(
-        filename='VariantNAML-{epoch:02d}-{val_ndcg@10:.4f}',
+        filename='Baseline-{epoch:02d}-{val/ndcg@10:.4f}',
         monitor='val/mrr',
         mode='max',
         save_top_k=1,

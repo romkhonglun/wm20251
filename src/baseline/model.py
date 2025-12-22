@@ -17,6 +17,7 @@ class CNNFeatureExtractor(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dropout = nn.Dropout(config.dropout)
+        self.bottleneck = nn.Linear(config.embedding_dim, 256)
         self.cnn = nn.Conv1d(
             in_channels=1,
             out_channels=config.num_filters,
@@ -34,7 +35,8 @@ class CNNFeatureExtractor(nn.Module):
 
         # 1. Unsqueeze để tạo channel dimension cho Conv1d
         # (N, EmbDim) -> (N, 1, EmbDim)
-        x = vector_input.unsqueeze(1)
+        x = self.bottleneck(vector_input)
+        x = x.unsqueeze(1)
         x = self.dropout(x)
 
         # 2. CNN
@@ -72,11 +74,20 @@ class AdditiveAttention(nn.Module):
 
 
 class NewsEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, pretrained_embeddings=None):
         super().__init__()
-        self.title_emb = nn.Embedding(1, config.embedding_dim)
-        self.body_emb = nn.Embedding(1, config.embedding_dim)
-        self.cat_emb = nn.Embedding(1, config.embedding_dim)
+        if pretrained_embeddings is not None:
+            print("⚡ NewsEncoder: Initializing with Pretrained Embeddings")
+            self.title_emb = nn.Embedding.from_pretrained(pretrained_embeddings['title'], freeze=True, padding_idx=0)
+            self.body_emb = nn.Embedding.from_pretrained(pretrained_embeddings['body'], freeze=True, padding_idx=0)
+            self.cat_emb = nn.Embedding.from_pretrained(pretrained_embeddings['cat'], freeze=True, padding_idx=0)
+        else:
+            # Fallback nếu không load được (Dùng số dummy lớn hoặc vocab size thực tế nếu biết)
+            print("⚠️ NewsEncoder: Initializing with Random Embeddings (Vocab=100000 placeholder)")
+            vocab_size = 100000
+            self.title_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+            self.body_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
+            self.cat_emb = nn.Embedding(vocab_size, config.embedding_dim, padding_idx=0)
 
         self.title_cnn = CNNFeatureExtractor(config)
         self.body_cnn = CNNFeatureExtractor(config)
@@ -131,9 +142,9 @@ class UserEncoder(nn.Module):
 
 
 class OriginalNAML(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, pretrained_embeddings=None):
         super().__init__()
-        self.news_encoder = NewsEncoder(config)
+        self.news_encoder = NewsEncoder(config, pretrained_embeddings)
         self.user_encoder = UserEncoder(config)
 
     def forward(self, hist_indices, cand_indices):

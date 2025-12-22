@@ -18,7 +18,7 @@ class TIME_FEATURE_NAMLConfig:
 
         # --- Feature Engineering Specs (Khớp với dataset.py) ---
         # [log_views, log_inviews, sentiment, log_read_time, freshness]
-        self.num_numerical_features = 5
+        self.num_numerical_features = 6
 
         # Kích thước embedding cho mỗi feature số sau khi qua hàm Sinusoidal
         self.sinusoidal_dim = 16
@@ -30,8 +30,7 @@ class TIME_FEATURE_NAMLConfig:
         self.num_categories = 50  # Tùy chỉnh theo dataset thực tế
         self.category_emb_dim = 32
 
-        # --- User Model Specs ---
-        self.num_interests = 5  # Số lượng vector sở thích (K)
+        self.num_interests = 5
         self.dropout = 0.1
 
         # --- Ranker Specs ---
@@ -330,7 +329,38 @@ class TIME_FEATURE_NAML(nn.Module):
         for k in ["hist_scroll", "hist_time", "hist_diff", "imp_feats", "cand_num"]:
             if k in batch and batch[k].dtype != torch.float32:
                 batch[k] = batch[k].to(torch.float32)
+        hist_emb = self.user_encoder.body_emb(batch["hist_indices"])  # [B, H, 1024]
+        cand_emb = self.cand_encoder.body_emb(batch["cand_indices"])  # [B, C, 1024]
 
+        # B. Tính Mean History Vector (Cẩn thận padding = 0)
+        # Tạo mask: 1 nếu là bài đọc, 0 nếu là padding
+        hist_mask = (batch["hist_indices"] != 0).float().unsqueeze(-1)  # [B, H, 1]
+
+        # Tổng các vector lịch sử
+        sum_hist = torch.sum(hist_emb * hist_mask, dim=1)  # [B, 1024]
+
+        # Đếm số lượng bài (tránh chia 0 bằng cách kẹp min=1e-9)
+        count_hist = torch.sum(hist_mask, dim=1).clamp(min=1e-9)  # [B, 1]
+
+        # Mean Vector
+        mean_hist = sum_hist / count_hist  # [B, 1024]
+
+        # C. Tính Dot Product (Similarity)
+        # [B, C, 1024] x [B, 1024, 1] -> [B, C, 1]
+        # Dùng bmm (Batch Matrix Multiplication)
+        cand_sim_gpu = torch.bmm(cand_emb, mean_hist.unsqueeze(-1))  # [B, C, 1]
+
+        # =========================================================
+        # 2. GHÉP VÀO FEATURE ĐỂ MODEL HỌC
+        # =========================================================
+        # batch["cand_num"] gốc có shape [B, C, 5]
+        # Ghép thêm cand_sim_gpu vào cuối -> [B, C, 6]
+
+        # Đảm bảo cùng kiểu dữ liệu
+        cand_sim_gpu = cand_sim_gpu.to(dtype=batch["cand_num"].dtype)
+
+        # Cập nhật lại batch["cand_num"]
+        batch["cand_num"] = torch.cat([batch["cand_num"], cand_sim_gpu], dim=-1)
         # ==========================
         # 1. ENCODE HISTORY (USER)
         # ==========================

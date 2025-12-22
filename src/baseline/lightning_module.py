@@ -26,9 +26,9 @@ class NAMLModule(L.LightningModule):
 
         self.config = config
         self.embedding_dir = embedding_dir
-
+        embeddings_dict = self._init_embeddings()
         # 2. Khởi tạo Model
-        self.model = OriginalNAML(config)
+        self.model = OriginalNAML(config,pretrained_embeddings=embeddings_dict)
 
         # 3. Khởi tạo Metrics Meter
         # Kết hợp BCE (cho classification) và ListNet (cho ranking)
@@ -37,7 +37,7 @@ class NAMLModule(L.LightningModule):
         self.val_meter = MetricsMeter(self.loss_weights)
 
         # 4. Load Pre-trained Embeddings
-        self._init_embeddings()
+
 
     def forward(self, batch):
         # [QUAN TRỌNG] Model OriginalNAML yêu cầu 2 tham số đầu vào riêng biệt
@@ -50,38 +50,25 @@ class NAMLModule(L.LightningModule):
         return scores
 
     def _init_embeddings(self):
+        """Hàm helper chỉ để load data lên RAM/Tensor"""
         print(f"Loading embedding weights from {self.embedding_dir}...")
         try:
-            emb_path = Path(self.embedding_dir)
-            # Load numpy mmap mode để tiết kiệm RAM lúc init
-            title_w = np.load(emb_path / "title_emb.npy", mmap_mode="r")
-            body_w = np.load(emb_path / "body_emb.npy", mmap_mode="r")
-            cat_w = np.load(emb_path / "cat_emb.npy", mmap_mode="r")
+            # Load mmap_mode='r' để không tốn RAM nếu file lớn, nhưng nếu cần GPU thì nên copy
+            # Ở đây ta load full vào RAM rồi chuyển sang Tensor
+            title_w = np.load(f"{self.embedding_dir}/title_emb.npy")
+            body_w = np.load(f"{self.embedding_dir}/body_emb.npy")
+            cat_w = np.load(f"{self.embedding_dir}/cat_emb.npy")
 
-            # Convert sang Tensor (Float)
-            title_tensor = torch.from_numpy(np.array(title_w)).float()
-            body_tensor = torch.from_numpy(np.array(body_w)).float()
-            cat_tensor = torch.from_numpy(np.array(cat_w)).float()
+            print(f"✅ Loaded embeddings: Title={title_w.shape}, Body={body_w.shape}")
 
-            # Inject vào Model
-            # freeze=True: Không train lại Embedding này (đỡ tốn VRAM)
-            # padding_idx=0: Vector tại index 0 sẽ luôn là vector 0
-            self.model.news_encoder.title_emb = nn.Embedding.from_pretrained(
-                title_tensor, freeze=True, padding_idx=0
-            )
-            self.model.news_encoder.body_emb = nn.Embedding.from_pretrained(
-                body_tensor, freeze=True, padding_idx=0
-            )
-            self.model.news_encoder.cat_emb = nn.Embedding.from_pretrained(
-                cat_tensor, freeze=True, padding_idx=0
-            )
-
-            print("✅ Embeddings injected successfully.")
-            # Xóa biến tạm
-            del title_w, body_w, cat_w, title_tensor, body_tensor, cat_tensor
-
+            return {
+                'title': torch.from_numpy(title_w).float(),
+                'body': torch.from_numpy(body_w).float(),
+                'cat': torch.from_numpy(cat_w).float()
+            }
         except Exception as e:
-            print(f"⚠️ Warning: Could not load embeddings ({e}). Using random init.")
+            print(f"⚠️ Warning: Could not load embeddings ({e}). Model will use Random Init.")
+            return None
 
     def training_step(self, batch, batch_idx):
         # 1. Forward Pass

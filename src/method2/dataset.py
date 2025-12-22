@@ -30,7 +30,7 @@ class NewsEmbeddingManager:
             print(f"✅ Vectors Ready. Shape: {self.vectors.shape}")
         except Exception as e:
             print(f"⚠️ Warning: {e}. Using Random.")
-            self.vectors = np.random.randn(100000, 768).astype(np.float32)
+            self.vectors = np.random.randn(100000, 1024).astype(np.float32)
 
     def get_vectors_by_indices(self, indices):
         return self.vectors[indices]
@@ -137,10 +137,10 @@ class NewsBaseLogic:
 
         # 4. Sim
         cand_vecs = self.emb_manager.get_vectors_by_indices(candidate_ids)
-        scores = (cand_vecs @ np.mean(self.emb_manager.get_vectors_by_indices(h_ids[:curr_len]), axis=0)).reshape(-1,
-                                                                                                                  1) if curr_len > 0 else np.zeros(
-            (len(candidate_ids), 1))
-
+        # scores = (cand_vecs @ np.mean(self.emb_manager.get_vectors_by_indices(h_ids[:curr_len]), axis=0)).reshape(-1,
+        #                                                                                                           1) if curr_len > 0 else np.zeros(
+        #     (len(candidate_ids), 1))
+        scores = np.zeros((len(candidate_ids), 1), dtype=np.float32)
         return {
             "hist_indices": torch.from_numpy(h_ids.astype(np.int64)),
             "hist_scroll": torch.from_numpy(h_scr),

@@ -83,11 +83,11 @@ class NAMLLightningModule(L.LightningModule):
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
         # Sử dụng train_meter
         losses = self.train_meter.update(meter_input)
-
-        self.log_dict(
-            {f"train/{k}": v for k, v in losses.items()},
-            on_step=True, on_epoch=True, prog_bar=True
-        )
+        if batch_idx % 10 == 0:
+            self.log_dict(
+                {f"train/{k}": v for k, v in losses.items()},
+                on_step=True, on_epoch=True, prog_bar=True
+            )
         return losses["loss"]
 
     def on_train_epoch_start(self):

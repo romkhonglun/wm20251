@@ -178,9 +178,9 @@ class NAMLNewsEncoder(nn.Module):
 
         # Init weights (như cũ)
         with torch.no_grad():
-            self.title_emb.weight[0].fill_(1e-5)
-            self.body_emb.weight[0].fill_(1e-5)
-            self.cat_emb.weight[0].fill_(1e-5)
+            self.title_emb.weight[0].fill_(1e-4)
+            self.body_emb.weight[0].fill_(1e-4)
+            self.cat_emb.weight[0].fill_(1e-4)
 
         # 2. Projectors (như cũ)
         self.title_proj = DeepProjector(config.embedding_dim, config.d_model, config.num_res_blocks, config.dropout)
@@ -278,8 +278,8 @@ class QualityAwareUserEncoder(nn.Module):
         self.pool_global = SafeAdditiveAttention(self.dim, config.query_vector_dim)
 
         self.fusion_module = MultiViewAttentionFusion(dim=self.dim, n_heads=config.nhead,dropout=config.dropout)
-        # self.fusion_norm = nn.LayerNorm(self.dim)
-
+        self.fusion_norm = nn.LayerNorm(self.dim)
+        self.denoise_factor = nn.Parameter(torch.tensor(0.5))
     def bucketize(self, float_tensor, num_buckets):
         # Clamp giá trị về [0, 1] trước khi chia bucket
         val = torch.clamp(float_tensor, 0.0, 1.0)
@@ -351,9 +351,9 @@ class QualityAwareUserEncoder(nn.Module):
         v_glo = self.pool_global(x, mask=padding_mask)
 
         # F. Fusion
-        # user_vec = v_glo + v_high - (0.5 * v_low)
-        # user_vec = self.fusion_norm(user_vec)
-        user_vec, weights = self.fusion_module(v_high, v_low, v_glo)
+        user_vec = v_glo + v_high - (torch.sigmoid(self.denoise_factor) * v_low)
+        user_vec = self.fusion_norm(user_vec)
+        # user_vec, weights = self.fusion_module(v_high, v_low, v_glo)
         return user_vec
 
 
@@ -391,10 +391,10 @@ class FullNewsRecModel(nn.Module):
 
         d_model = user_vec.shape[-1]
         scaled_scores = raw_scores / (d_model ** 0.5)
-        final_scores = torch.clamp(scaled_scores, min=-10.0, max=10.0)
+        # final_scores = torch.clamp(scaled_scores, min=-10.0, max=10.0)
 
         return {
-            "preds": final_scores,
+            "preds": scaled_scores,
             "labels": batch.get("labels", None)
         }
 

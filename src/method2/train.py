@@ -122,7 +122,7 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints",
         filename="naml-{epoch:02d}-{val/auc:.4f}",
-        save_top_k=20,
+        save_top_k=1,
         monitor="val/auc",
         mode="max",
         verbose=True

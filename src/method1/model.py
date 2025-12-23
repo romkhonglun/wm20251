@@ -13,11 +13,11 @@ class UnifiedConfig:
         self.embedding_dim = 1024
 
         # --- Model Specs ---
-        self.d_model = 128
-        self.query_vector_dim = 200
+        self.d_model = 256
+        self.query_vector_dim = 512
         self.nhead = 8
         self.dropout = 0.2
-        self.num_res_blocks = 1
+        self.num_res_blocks = 3
 
         # --- User Behavior Specs ---
         # [CHANGE] Đổi WPM thành Time buckets

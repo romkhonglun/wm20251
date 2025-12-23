@@ -13,9 +13,9 @@ class VariantNAMLConfig:
         self.window_size = 128  # d_model
 
         # --- Internal Specs ---
-        self.query_vector_dim = 200
+        self.query_vector_dim = 512
         self.dropout = 0.2
-        self.num_res_blocks = 1
+        self.num_res_blocks = 3
 
 # ==========================================
 # 2. UTILS & BLOCKS

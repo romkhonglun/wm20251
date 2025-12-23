@@ -45,16 +45,16 @@ class NAMLLightningModule(L.LightningModule):
             vectors_tensor = torch.randn(100000, self.config.pretrained_dim)
 
         # Khởi tạo model gốc
-        self.model = TIME_FEATURE_NAML(self.config, vectors_tensor)
+        raw_model = TIME_FEATURE_NAML(self.config, vectors_tensor)
 
         # --- Áp dụng torch.compile ---
-        # if use_compile and hasattr(torch, "compile"):
-        #     print("🚀 Compiling model with torch.compile...")
-        #     # 'reduce-overhead' thường tốt cho các model recommend/NLP nhỏ
-        #     # 'default' an toàn nhất.
-        #     self.model = torch.compile(raw_model)
-        # else:
-        #     self.model = raw_model
+        if use_compile and hasattr(torch, "compile"):
+            print("🚀 Compiling model with torch.compile...")
+            # 'reduce-overhead' thường tốt cho các model recommend/NLP nhỏ
+            # 'default' an toàn nhất.
+            self.model = torch.compile(raw_model)
+        else:
+            self.model = raw_model
 
         # --- Metrics Meter ---
         self.loss_weights = {"bce_loss": 1.0}
@@ -83,11 +83,11 @@ class NAMLLightningModule(L.LightningModule):
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
         # Sử dụng train_meter
         losses = self.train_meter.update(meter_input)
-        if batch_idx % 10 == 0:
-            self.log_dict(
-                {f"train/{k}": v for k, v in losses.items()},
-                on_step=True, on_epoch=True, prog_bar=True
-            )
+
+        self.log_dict(
+            {f"train/{k}": v for k, v in losses.items()},
+            on_step=True, on_epoch=True, prog_bar=True
+        )
         return losses["loss"]
 
     def on_train_epoch_start(self):

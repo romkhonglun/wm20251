@@ -273,3 +273,4 @@ class NewsRecDataModule(pl.LightningDataModule):
             "candidate_ids": cands_padded,
             "labels": lbls_padded
         }
+

@@ -146,11 +146,11 @@ def main():
             checkpoint_callback,
             # early_stop_callback,
             RichModelSummary(max_depth=2),
-            RichProgressBar(refresh_rate=1),
+            RichProgressBar(refresh_rate=10),
         ],
         gradient_clip_algorithm="norm",
         max_epochs=args.epochs,
-        precision="32",
+        precision="16-mixed",
     )
 
     print("🚀 Starting training...")

@@ -73,7 +73,7 @@ def main():
     # 6. Callbacks
     # Lưu model tốt nhất dựa trên NDCG@10 (metric quan trọng nhất của RecSys)
     checkpoint_callback = ModelCheckpoint(
-        filename='Baseline-{epoch:02d}-{val/ndcg@10:.4f}',
+        filename='Baseline-{epoch:02d}-{val/auc:.4f}',
         monitor='val/mrr',
         mode='max',
         save_top_k=1,
@@ -94,7 +94,7 @@ def main():
     # 7. Trainer
     trainer = pl.Trainer(
         logger=wandb_logger,
-        callbacks=[checkpoint_callback, lr_monitor,TQDMProgressBar(),ModelSummary()],
+        callbacks=[checkpoint_callback, lr_monitor,TQDMProgressBar(refresh_rate=20),ModelSummary()],
         max_epochs=args.epochs,
         accelerator="auto",
         devices="auto",

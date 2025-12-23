@@ -13,11 +13,11 @@ class UnifiedConfig:
         self.embedding_dim = 1024
 
         # --- Model Specs ---
-        self.d_model = 256
-        self.query_vector_dim = 512
+        self.d_model = 128
+        self.query_vector_dim = 200
         self.nhead = 8
         self.dropout = 0.2
-        self.num_res_blocks = 3
+        self.num_res_blocks = 1
 
         # --- User Behavior Specs ---
         # [CHANGE] Đổi WPM thành Time buckets
@@ -97,39 +97,157 @@ class MaskedMultiHeadAttention(nn.Module):
         return attn_out
 
 
+class MultiViewAttentionFusion(nn.Module):
+    def __init__(self, dim, n_heads=4, dropout=0.1):
+        super().__init__()
+        # 1. Feature Transformation
+        # Giữ lại các lớp này để biến đổi đặc trưng trước khi fuse.
+        # Đặc biệt quan trọng với v_low để model có thể "xoay" vector này
+        # sang hướng có thể triệt tiêu nhiễu thay vì cộng dồn.
+        self.trans_high = nn.Sequential(nn.Linear(dim, dim), nn.Tanh())
+        self.trans_low = nn.Sequential(nn.Linear(dim, dim), nn.Tanh())
+        self.trans_glo = nn.Sequential(nn.Linear(dim, dim), nn.Tanh())
+
+        # 2. Multi-Head Attention Fusion
+        self.mha = nn.MultiheadAttention(
+            embed_dim=dim,
+            num_heads=n_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        # 3. Learnable Query ("User Fusion Token")
+        # Vector này đóng vai trò như [CLS] token, học cách đặt câu hỏi:
+        # "Tôi nên tin tưởng bao nhiêu % vào High, Low và Global?"
+        self.fusion_query = nn.Parameter(torch.randn(1, 1, dim))
+
+        self.layer_norm = nn.LayerNorm(dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, v_high, v_low, v_glo):
+        """
+        v_high, v_low, v_glo: [Batch, Dim]
+        """
+        B = v_high.size(0)
+
+        # A. Transform Input Views
+        t_high = self.trans_high(v_high)  # [B, D]
+        t_low = self.trans_low(v_low)  # [B, D]
+        t_glo = self.trans_glo(v_glo)  # [B, D]
+
+        # B. Stack thành Sequence (Key & Value)
+        # Sequence Length = 3 (tương ứng 3 views)
+        # Shape: [Batch, 3, Dim]
+        kv_seq = torch.stack([t_high, t_low, t_glo], dim=1)
+
+        # C. Prepare Query
+        # Expand query cho khớp batch size: [Batch, 1, Dim]
+        query = self.fusion_query.expand(B, -1, -1)
+
+        # D. MHA Forward
+        # Query: Learnable Token
+        # Key/Value: 3 Views (High, Low, Glo)
+        # Output: [Batch, 1, Dim]
+        # Weights: [Batch, 1, 3] -> Cho biết view nào được chú ý nhiều nhất
+        attn_out, attn_weights = self.mha(query, kv_seq, kv_seq)
+
+        user_vec = attn_out.squeeze(1)  # [B, D]
+
+        # E. Residual Connection & Norm
+        # Cộng residual với v_glo (luồng thông tin ổn định nhất) để luồng gradient mượt hơn
+        user_vec = user_vec + v_glo
+
+        user_vec = self.layer_norm(user_vec)
+        user_vec = self.dropout(user_vec)
+
+        return user_vec, attn_weights
+
 # ==========================================
 # 3. NAML NEWS ENCODER
+# ==========================================
+# ==========================================
+# 3. NAML NEWS ENCODER (UPDATED WITH MHA)
 # ==========================================
 class NAMLNewsEncoder(nn.Module):
     def __init__(self, config: UnifiedConfig):
         super().__init__()
+        # 1. Embeddings
         self.title_emb = nn.Embedding(20000, config.embedding_dim)
         self.body_emb = nn.Embedding(20000, config.embedding_dim)
         self.cat_emb = nn.Embedding(20000, config.embedding_dim)
 
+        # Init weights (như cũ)
         with torch.no_grad():
             self.title_emb.weight[0].fill_(1e-5)
             self.body_emb.weight[0].fill_(1e-5)
             self.cat_emb.weight[0].fill_(1e-5)
 
+        # 2. Projectors (như cũ)
         self.title_proj = DeepProjector(config.embedding_dim, config.d_model, config.num_res_blocks, config.dropout)
         self.body_proj = DeepProjector(config.embedding_dim, config.d_model, config.num_res_blocks, config.dropout)
         self.cat_proj = DeepProjector(config.embedding_dim, config.d_model, num_res_blocks=1, dropout=config.dropout)
-        self.final_attention = SafeAdditiveAttention(config.d_model, config.query_vector_dim)
+
+        # 3. [CHANGE] Thay Additive thành MultiHeadAttention
+        # Chúng ta dùng MHA để gộp 3 views (Title, Body, Cat) thành 1 vector
+        self.news_attn = nn.MultiheadAttention(
+            embed_dim=config.d_model,
+            num_heads=config.nhead,
+            dropout=config.dropout,
+            batch_first=True
+        )
+
+        # "Learnable Query": Một vector tham số hóa đóng vai trò "câu hỏi"
+        # để model học cách lấy thông tin từ Title, Body, Cat.
+        # Shape: [1, 1, d_model]
+        self.news_query = nn.Parameter(torch.randn(1, 1, config.d_model))
+
+        # LayerNorm đầu ra cho ổn định (Optional nhưng khuyến nghị với MHA)
+        self.norm = nn.LayerNorm(config.d_model)
 
     def forward(self, indices):
-        valid_mask = (indices != 0).float().unsqueeze(-1)
+        # indices shape: [Batch, News_Count]
+        valid_mask = (indices != 0).float().unsqueeze(-1)  # [B, N, 1]
+
+        # 1. Embed & Project
         t = self.title_proj(self.title_emb(indices))
         b = self.body_proj(self.body_emb(indices))
         c = self.cat_proj(self.cat_emb(indices))
+
+        # 2. Stack Views: [B, N, 3, D]
         stacked = torch.stack([t, b, c], dim=2)
+
         B, N, V, D = stacked.shape
-        stacked = stacked.view(-1, V, D)
-        vecs = self.final_attention(stacked)
-        vecs = vecs.view(B, N, D)
+
+        # Flatten Batch và News dimension để đưa vào Attention
+        # Input shape cho MHA: [Batch_Size * News_Count, Seq_Len=3, Dim]
+        flat_input = stacked.view(-1, V, D)
+        batch_size_prime = flat_input.size(0)  # = B * N
+
+        # 3. Prepare Query
+        # Expand query cho khớp batch size: [B*N, 1, D]
+        query = self.news_query.expand(batch_size_prime, -1, -1)
+
+        # 4. Multi-Head Attention
+        # Query: Vector đại diện (1 token)
+        # Key/Value: 3 views (Title, Body, Cat)
+        # Output: [B*N, 1, D]
+        attn_out, _ = self.news_attn(query, flat_input, flat_input)
+
+        # Squeeze sequence dim: [B*N, 1, D] -> [B*N, D]
+        news_vec_flat = attn_out.squeeze(1)
+
+        # Add & Norm (Residual connection với Query gốc - tùy chọn, ở đây mình dùng Norm output)
+        news_vec_flat = self.norm(news_vec_flat)
+
+        # 5. Reshape lại về [Batch, News_Count, Dim]
+        vecs = news_vec_flat.view(B, N, D)
+
+        # 6. Apply Mask (Những bài báo là padding (index 0) thì vector về 0)
         vecs = vecs * valid_mask
+
         if torch.isnan(vecs).any():
             vecs = torch.nan_to_num(vecs, nan=0.0)
+
         return vecs
 
 
@@ -159,7 +277,8 @@ class QualityAwareUserEncoder(nn.Module):
         self.pool_low = SafeAdditiveAttention(self.dim, config.query_vector_dim)
         self.pool_global = SafeAdditiveAttention(self.dim, config.query_vector_dim)
 
-        self.fusion_norm = nn.LayerNorm(self.dim)
+        self.fusion_module = MultiViewAttentionFusion(dim=self.dim, n_heads=config.nhead,dropout=config.dropout)
+        # self.fusion_norm = nn.LayerNorm(self.dim)
 
     def bucketize(self, float_tensor, num_buckets):
         # Clamp giá trị về [0, 1] trước khi chia bucket
@@ -177,7 +296,7 @@ class QualityAwareUserEncoder(nn.Module):
         # log1p(20s) ~ 3.0  => Coi là đọc kỹ
         # log1p(3s)  ~ 1.3  => Coi là clickbait/lướt
         high_time_thresh = 4.0
-        low_time_thresh = 2.3
+        low_time_thresh = 1.3
 
         scroll_thresh = 0.2  # 20%
 
@@ -232,9 +351,9 @@ class QualityAwareUserEncoder(nn.Module):
         v_glo = self.pool_global(x, mask=padding_mask)
 
         # F. Fusion
-        user_vec = v_glo + v_high - (0.5 * v_low)
-        user_vec = self.fusion_norm(user_vec)
-
+        # user_vec = v_glo + v_high - (0.5 * v_low)
+        # user_vec = self.fusion_norm(user_vec)
+        user_vec, weights = self.fusion_module(v_high, v_low, v_glo)
         return user_vec
 
 

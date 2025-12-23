@@ -10,7 +10,7 @@ class VariantNAMLConfig:
     def __init__(self):
         # --- Dimensions ---
         self.embedding_dim = 1024
-        self.window_size = 400  # d_model
+        self.window_size = 128  # d_model
 
         # --- Internal Specs ---
         self.query_vector_dim = 200
@@ -78,16 +78,7 @@ class MultiHeadSelfAttention(nn.Module):
         out, _ = self.mha(x, x, x)
         return out
 
-class SingleInterestUserEncoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.self_attn = MultiHeadSelfAttention(config.window_size, num_heads=4)
-        self.attention = AdditiveAttention(config.window_size, config.query_vector_dim)
 
-    def forward(self, news_vecs):
-        x = self.self_attn(news_vecs)
-        x = self.attention(x)
-        return x
 
 
 class NewsEncoder(nn.Module):
@@ -139,7 +130,7 @@ class NewsEncoder(nn.Module):
         stacked_views = torch.stack([t_vec, b_vec, c_vec], dim=2)
 
         # Flatten batch dimension: (Batch * Num_News, 3_Views, 400)
-        stacked_views = stacked_views.view(-1, 3, self.config.window_size if 'config' in locals() else 400)
+        stacked_views = stacked_views.view(-1, 3, self.config.window_size)
 
         # Apply Attention
         # (Batch * Num_News, 400)
@@ -147,6 +138,17 @@ class NewsEncoder(nn.Module):
 
         # Reshape lại về batch ban đầu
         return news_vectors.view(batch_size, num_news, -1)
+
+class SingleInterestUserEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # self.self_attn = MultiHeadSelfAttention(config.window_size, num_heads=4)
+        self.attention = AdditiveAttention(config.window_size, config.query_vector_dim)
+
+    def forward(self, news_vecs):
+        # x = self.self_attn(news_vecs)
+        x = self.attention(news_vecs)
+        return x
 
 class VariantNAML(nn.Module):
     def __init__(self, config):

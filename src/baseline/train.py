@@ -74,7 +74,7 @@ def main():
     # Lưu model tốt nhất dựa trên NDCG@10 (metric quan trọng nhất của RecSys)
     checkpoint_callback = ModelCheckpoint(
         filename='Baseline-{epoch:02d}-{val/auc:.4f}',
-        monitor='val/mrr',
+        monitor='val/auc',
         mode='max',
         save_top_k=1,
         verbose=True

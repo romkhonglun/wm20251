@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Import các module của Method 1
 from dataset import NAMLDataModule
-from model import VariantNAMLConfig
+from model import UnifiedConfig as VariantNAMLConfig
 from lightning_module import NAMLLightningModule
 
 # Load biến môi trường (nếu có file .env)
@@ -52,15 +52,14 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=4, help="Số worker cho DataLoader")
 
     # --- System ---
-    parser.add_argument("--wandb-project", type=str, default="NAML-Method1", help="Tên project trên WandB")
-    parser.add_argument("--wandb-name", type=str, default=None, help="Tên run cụ thể (optional)")
+    parser.add_argument("--wandb-project", type=str, default="NewsRecSys", help="Tên project trên WandB")
+    parser.add_argument("--wandb-name", type=str, default="method1", help="Tên run cụ thể (optional)")
     parser.add_argument("--offline", action="store_true", help="Chạy chế độ offline (không sync wandb)")
 
     return parser.parse_args()
 
 
 def main():
-    torch.autograd.set_detect_anomaly(True)
     args = parse_args()
 
     # Set seed để đảm bảo tái lập kết quả
@@ -89,18 +88,16 @@ def main():
     # Lưu ý: embedding_path của DataModule trỏ về root_dir vì cần file article_ids.npy ở đó
     dm = NAMLDataModule(
         root_path=args.root_dir,
-        embedding_path=args.embedding_dir,
+        # embedding_path=args.embedding_dir,
         batch_size=args.batch_size,
-        history_len=args.history_len,
         neg_ratio=args.neg_ratio,
         num_workers=args.num_workers
     )
 
     # 3. Logger (WandB)
-    run_name = args.wandb_name if args.wandb_name else f"M1-bs{args.batch_size}-lr{args.lr}"
     wandb_logger = WandbLogger(
         project=args.wandb_project,
-        name=run_name,
+        name=args.wandb_name,
         log_model=False,
         mode="offline" if args.offline else "online"
     )
@@ -125,11 +122,11 @@ def main():
         callbacks=[
             checkpoint_callback,
             RichModelSummary(max_depth=2),
-            TQDMProgressBar(refresh_rate=1)
+            TQDMProgressBar(refresh_rate=20)
         ],
         max_epochs=args.epochs,
         precision="16-mixed",  # Mixed precision giúp train nhanh hơn và ít VRAM hơn
-        # gradient_clip_val=0.5,  # Chống bùng nổ gradient
+        gradient_clip_val=1.0,  # Chống bùng nổ gradient
         log_every_n_steps=50
     )
 

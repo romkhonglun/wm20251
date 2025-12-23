@@ -6,10 +6,8 @@ import numpy as np
 from pathlib import Path
 
 # Import Model và Utils
-from model import VariantNAML
+from model import FullNewsRecModel as VariantNAML
 from utils import MetricsMeter
-from torchmetrics import AUROC
-import torch.nn.functional as F
 
 class NAMLLightningModule(pl.LightningModule):
     def __init__(self, config, embedding_dir, lr=1e-3, weight_decay=1e-4):

@@ -31,10 +31,10 @@ class TIME_FEATURE_NAMLConfig:
         self.category_emb_dim = 32
 
         self.num_interests = 5
-        self.dropout = 0.1
+        self.dropout = 0.2
 
         # --- Ranker Specs ---
-        self.rankformer_layers = 8
+        self.rankformer_layers = 3
         self.rankformer_heads = 4
         self.rankformer_ffn_dim = 512
 

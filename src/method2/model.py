@@ -39,9 +39,9 @@ class TIME_FEATURE_NAMLConfig:
         self.rankformer_ffn_dim = 512
 
 
+# ======================================
 # ==========================================
-# 2. BUILDING BLOCKS (UTILITIES)
-# ==========================================
+# 2. BUILDING BLOCKS (UTILITIES)====
 class SinusoidalEmbedding(nn.Module):
     """
     Biến đổi một giá trị số thực (scalar) thành vector (vectorization).

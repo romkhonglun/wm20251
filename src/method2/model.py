@@ -340,7 +340,7 @@ class TIME_FEATURE_NAML(nn.Module):
         sum_hist = torch.sum(hist_emb * hist_mask, dim=1)  # [B, 1024]
 
         # Đếm số lượng bài (tránh chia 0 bằng cách kẹp min=1e-9)
-        count_hist = torch.sum(hist_mask, dim=1).clamp(min=1e-9)  # [B, 1]
+        count_hist = torch.sum(hist_mask, dim=1).clamp(min=1e-4)  # [B, 1]
 
         # Mean Vector
         mean_hist = sum_hist / count_hist  # [B, 1024]

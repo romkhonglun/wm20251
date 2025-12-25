@@ -45,7 +45,7 @@ class NAMLLightningModule(L.LightningModule):
             vectors_tensor = torch.randn(100000, self.config.pretrained_dim)
 
         # Khởi tạo model gốc
-        model = TIME_FEATURE_NAML(self.config, vectors_tensor)
+        self.model = TIME_FEATURE_NAML(self.config, vectors_tensor)
 
         # --- Áp dụng torch.compile ---
         # if use_compile and hasattr(torch, "compile"):

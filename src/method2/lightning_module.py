@@ -164,7 +164,7 @@ class NAMLLightningModule(L.LightningModule):
             if total_steps is None or total_steps <= 0:
                 total_steps = 10000
             print(f"total_steps for OneCycleLR: {total_steps}")
-            max_lr = getattr(self.hparams, "scheduler_max_lr", 3e-3)
+            max_lr = getattr(self.hparams, "scheduler_max_lr", 1e-3)
 
             if max_lr is None:
                 max_lr = 3e-3

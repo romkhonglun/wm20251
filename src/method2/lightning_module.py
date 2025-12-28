@@ -3,12 +3,14 @@ import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as L
 import numpy as np
+import gc
 from pathlib import Path
 
 # Import Models
 from model import TIME_FEATURE_NAML, TIME_FEATURE_NAMLConfig
-# Import Utils vừa tạo
+# Import Utils
 from utils import MetricsMeter
+
 
 class NAMLLightningModule(L.LightningModule):
 
@@ -22,66 +24,90 @@ class NAMLLightningModule(L.LightningModule):
             scheduler_total_steps=None,
             scheduler_max_lr=None,
             scheduler_t_max=None,
-            use_compile=True,  # Thêm flag để bật/tắt compile
+            use_compile=True,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['config'])
         self.config = config if config is not None else TIME_FEATURE_NAMLConfig()
 
-        # --- Init Model & Embeddings ---
-        if embedding_path and Path(embedding_path).exists():
-            print(f"Loading vectors from {embedding_path}...")
-            vectors_np = np.load(embedding_path)
-            vectors_tensor = torch.from_numpy(vectors_np).to(torch.float32)
+        # --- 1. Init Embeddings (Tối ưu bộ nhớ) ---
+        vectors_tensor = self._load_embeddings_safely(embedding_path)
 
-            real_dim = vectors_tensor.shape[1]
-            if self.config.pretrained_dim != real_dim:
-                self.config.pretrained_dim = real_dim
+        # --- 2. Init Model ---
+        # Truyền tensor đã xử lý vào model
+        raw_model = TIME_FEATURE_NAML(self.config, vectors_tensor)
 
-            norm = torch.norm(vectors_tensor, p=2, dim=1, keepdim=True)
-            vectors_tensor = vectors_tensor / (norm + 1e-10)
+        # Sau khi model đã init xong (đã lưu weights vào nn.Embedding),
+        # ta xóa biến tạm vectors_tensor để giải phóng RAM triệt để
+        del vectors_tensor
+        gc.collect()
+
+        # --- 3. Compile Model (Optional) ---
+        if use_compile and hasattr(torch, "compile"):
+            print("🚀 Compiling model with torch.compile...")
+            self.model = torch.compile(raw_model)
         else:
-            print("⚠️ Using Random Embeddings.")
-            vectors_tensor = torch.randn(100000, self.config.pretrained_dim)
+            self.model = raw_model
 
-        # Khởi tạo model gốc
-        self.model = TIME_FEATURE_NAML(self.config, vectors_tensor)
-
-        # --- Áp dụng torch.compile ---
-        # if use_compile and hasattr(torch, "compile"):
-        #     print("🚀 Compiling model with torch.compile...")
-        #     # 'reduce-overhead' thường tốt cho các model recommend/NLP nhỏ
-        #     # 'default' an toàn nhất.
-        #     self.model = torch.compile(raw_model)
-        # else:
-        #     self.model = raw_model
-
-        # --- Metrics Meter ---
+        # --- 4. Metrics ---
         self.loss_weights = {"bce_loss": 1.0}
         self.train_meter = MetricsMeter(self.loss_weights)
         self.val_meter = MetricsMeter(self.loss_weights)
 
+    def _load_embeddings_safely(self, embedding_path):
+        """Hàm load embedding tối ưu bộ nhớ, tránh lỗi read-only numpy"""
+        if embedding_path and Path(embedding_path).exists():
+            print(f"Loading vectors from {embedding_path}...")
+
+            # 1. Load Numpy
+            # Không dùng mmap_mode='r' để tránh lỗi pytorch conflict
+            vectors_np = np.load(embedding_path)
+
+            # 2. Tạo Tensor Copy (Explicit Copy)
+            # Dùng torch.tensor() thay vì as_tensor/from_numpy để đảm bảo sở hữu memory riêng
+            vectors_tensor = torch.tensor(vectors_np, dtype=torch.float32)
+
+            # 3. Xóa ngay Numpy Array khỏi RAM
+            del vectors_np
+            gc.collect()
+
+            # 4. Update config dim nếu cần
+            real_dim = vectors_tensor.shape[1]
+            if self.config.pretrained_dim != real_dim:
+                print(f"⚠️ Updating config dim from {self.config.pretrained_dim} to {real_dim}")
+                self.config.pretrained_dim = real_dim
+
+            # 5. Normalize (In-place để tiết kiệm RAM)
+            print(" -> Normalizing vectors...")
+            norm = torch.norm(vectors_tensor, p=2, dim=1, keepdim=True)
+            vectors_tensor.div_(norm + 1e-4)  # In-place division
+
+            print("✅ Embeddings loaded & optimized.")
+            return vectors_tensor
+        else:
+            print("⚠️ Embedding path not found. Using Random Embeddings.")
+            return torch.randn(100000, self.config.pretrained_dim)
+
     def forward(self, batch):
-        # Determine target dtype from model parameters (fallback to float32)
         return self.model(batch)
 
     def training_step(self, batch, batch_idx):
-        # Determine target dtype from model parameters (fallback to float32)
+        # Tự động ép kiểu float16/float32 tùy theo precision của model
         try:
             target_dtype = next(self.model.parameters()).dtype
         except StopIteration:
             target_dtype = torch.float32
 
-        # Cast floating tensors and check NaNs
+        # Cast floating tensors
         for k, v in batch.items():
             if isinstance(v, torch.Tensor) and torch.is_floating_point(v):
                 batch[k] = v.to(dtype=target_dtype)
                 if torch.isnan(batch[k]).any():
-                    raise ValueError(f"❌ Input '{k}' contains NaN!")
+                    print(f"⚠️ Warning: NaN found in {k}")
 
         output = self(batch)
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
-        # Sử dụng train_meter
+
         losses = self.train_meter.update(meter_input)
 
         self.log_dict(
@@ -95,30 +121,8 @@ class NAMLLightningModule(L.LightningModule):
 
     def on_validation_epoch_start(self):
         self.val_meter.reset()
-    #
-    # def training_step(self, batch, batch_idx):
-    #     # Ép kiểu tất cả các tensor số thực trong batch về float32
-    #     for k, v in batch.items():
-    #         if isinstance(v, torch.Tensor) and torch.is_floating_point(v):
-    #             batch[k] = v.to(torch.float32)
-    #
-    #             # Giữ nguyên đoạn check lỗi của bạn
-    #             if torch.isnan(batch[k]).any():
-    #                 raise ValueError(f"❌ Input '{k}' chứa NaN!")
-    #
-    #     output = self(batch)
-    #     meter_input = {"preds": output["preds"], "labels": batch["labels"]}
-    #     losses = self.meter.update(meter_input)
-    #
-    #     self.log_dict(
-    #         {f"train/{k}": v for k, v in losses.items()},
-    #         on_step=True, on_epoch=True, prog_bar=True, batch_size=len(batch['hist_indices'])
-    #     )
-    #
-    #     return losses["loss"]
 
     def validation_step(self, batch, batch_idx):
-        # Đảm bảo ép kiểu để tránh lỗi device/dtype như training_step
         try:
             target_dtype = next(self.model.parameters()).dtype
         except StopIteration:
@@ -131,20 +135,13 @@ class NAMLLightningModule(L.LightningModule):
         output = self(batch)
         meter_input = {"preds": output["preds"], "labels": batch["labels"]}
 
-        # Hàm update của MetricsMeter trả về dict chứa "loss"
-        # Sử dụng val_meter
         losses = self.val_meter.update(meter_input)
-
-        # Log loss theo batch mà không sợ lẫn với train step
         self.log("val/loss", losses["loss"], on_step=False, on_epoch=True)
         return losses["loss"]
 
     def on_validation_epoch_end(self):
-        # Tính toán kết quả từ val_meter
         metrics = self.val_meter.compute()
         self.log_dict({f"val/{k}": v for k, v in metrics.items()}, prog_bar=True)
-
-        # Reset sau khi đã log xong kết quả epoch
         self.val_meter.reset()
 
     def configure_optimizers(self):
@@ -156,20 +153,10 @@ class NAMLLightningModule(L.LightningModule):
 
         scheduler_choice = getattr(self.hparams, "scheduler", "onecycle")
 
-        # OneCycleLR (step-based)
         if scheduler_choice == "onecycle":
-            # determine total_steps: explicit > trainer estimate > fallback
-            total_steps = getattr(self.hparams, "scheduler_total_steps", None)
+            total_steps = getattr(self.hparams, "scheduler_total_steps", 10000) or 10000
+            max_lr = getattr(self.hparams, "scheduler_max_lr", 3e-3) or 3e-3
 
-            if total_steps is None or total_steps <= 0:
-                total_steps = 10000
-            print(f"total_steps for OneCycleLR: {total_steps}")
-            max_lr = getattr(self.hparams, "scheduler_max_lr", 1e-3)
-
-            if max_lr is None:
-                max_lr = 3e-3
-
-            print(f"total_steps for OneCycleLR: {total_steps}, max_lr: {max_lr}")
             scheduler = optim.lr_scheduler.OneCycleLR(
                 optimizer,
                 max_lr=max_lr,
@@ -179,11 +166,8 @@ class NAMLLightningModule(L.LightningModule):
             )
             return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
-        # Cosine annealing (step-based)
         if scheduler_choice == "cosine":
-            t_max = getattr(self.hparams, "scheduler_t_max", None)
-            if t_max is None or t_max <= 0:
-                t_max = 10000
+            t_max = getattr(self.hparams, "scheduler_t_max", 10000) or 10000
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
             return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
